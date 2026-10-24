@@ -1,0 +1,8 @@
+# build output
+desktop/bin/
+desktop/obj/
+dist/
+build_test/
+# packaged release (zip + its staging folder)
+ReelEdit/
+ReelEdit.zip
