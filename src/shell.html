@@ -41,6 +41,10 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 @media (max-width:1250px){#top .brand{display:none}#projName{width:130px}#projInfo{display:none}#main{grid-template-columns:var(--binw,210px) minmax(260px,1fr) var(--inspw,260px)}}
 .brand{display:flex;align-items:center;gap:7px;font-weight:800;letter-spacing:.12em;font-size:13px;margin-right:6px}
 .brand b{color:var(--acc);font-weight:800}
+#ver{font-weight:600;letter-spacing:.02em;font-size:10px;color:var(--tx3);margin-left:2px;cursor:default}
+#upd{background:rgba(91,209,139,.14);color:#9ff0c4;border:1px solid rgba(91,209,139,.5);border-radius:11px;padding:3px 10px;font-weight:600;font-size:11px;cursor:pointer;margin-right:6px;white-space:nowrap}
+#upd:hover{background:rgba(91,209,139,.24)}
+.mbox .ver{color:var(--tx2);font-size:12px;margin-right:auto;align-self:center}
 #projName{background:none;border-color:transparent;font-weight:600;width:200px}
 #projName:hover{border-color:var(--line)}
 #projInfo{color:var(--tx3);font-variant-numeric:tabular-nums}
@@ -184,7 +188,8 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 <body>
 <div id="app">
   <header id="top">
-    <div class="brand"><svg width="20" height="20" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3" fill="none" stroke="#ff8a3d" stroke-width="2"/><path d="M7 5v14M17 5v14" stroke="#ff8a3d" stroke-width="1.5" opacity=".5"/><path d="M10 9.5v5l4.3-2.5z" fill="#ff8a3d"/></svg>REEL<b>EDIT</b></div>
+    <div class="brand"><svg width="20" height="20" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3" fill="none" stroke="#ff8a3d" stroke-width="2"/><path d="M7 5v14M17 5v14" stroke="#ff8a3d" stroke-width="1.5" opacity=".5"/><path d="M10 9.5v5l4.3-2.5z" fill="#ff8a3d"/></svg>REEL<b>EDIT</b><small id="ver"></small></div>
+    <button id="upd" hidden></button>
     <div class="grp">
       <button id="bNew" title="New project">New</button>
       <button id="bOpen" title="Open project file (Ctrl+O)">Open</button>

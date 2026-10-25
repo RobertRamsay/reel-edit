@@ -100,6 +100,19 @@ Notes
     size automatically when your machine can't keep up at full size.
   * Press ? in the app for the full list of shortcuts.
 
+Version and updates
+  The version shows next to the logo (hover it for the build number and date), in the ? panel and in the
+  exe's window title. A few seconds after start-up, and every 6 hours after that, the app reads a small
+  update feed. If a newer build exists, a green "Update available" badge appears in the top bar, and
+  clicking it shows the release notes and a Download link. "Check for updates" in the ? panel checks on
+  demand. Offline, the check fails silently.
+  * version.json holds the version, the build number (a whole number that goes up by 1 every release,
+    which is what the update check compares), the date and the release notes.
+  * To release: bump version, build and date in version.json and write the notes, commit, then run
+    node release.js
+    It builds the exe and zip, tags and pushes, creates the GitHub release with the zip attached, and
+    updates the feed. Use node release.js --dry to only build and zip.
+
 Source code: src/ (core.js, proxy.js, export.js, timeline.js, ui.js, shell.html). To rebuild ReelEdit.html, run: node src/build.js
 Desktop shell: desktop/ (.NET 8 WinForms + WebView2, with the web app embedded). To rebuild the exe, run:
   dotnet publish desktop -c Release -o dist

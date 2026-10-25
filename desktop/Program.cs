@@ -12,7 +12,7 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        Log.Write("start " + string.Join(" ", args));
+        Log.Write("start v" + Application.ProductVersion + " " + string.Join(" ", args));
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => Fatal(e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Fatal(e.ExceptionObject as Exception);
@@ -67,7 +67,7 @@ sealed class MainForm : Form
     {
         devTools = args.Contains("--devtools");
         pendingOpen = args.Where(File.Exists).Select(Path.GetFullPath).ToList();
-        Text = "Reel Edit";
+        Text = "Reel Edit " + Application.ProductVersion;
         BackColor = Color.FromArgb(12, 13, 16);
         try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath); } catch { }
         StartPosition = FormStartPosition.CenterScreen;

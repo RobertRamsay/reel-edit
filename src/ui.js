@@ -482,7 +482,7 @@ function openHelp() {
     h('h3', {}, 'Tools & modes'), K('Select / Blade / Slip', 'V / B / Y'), K('Snapping', 'N'), K('Auto cross-fade', 'X'), K('Ripple mode', 'R'), K('Marker (tap while playing)', 'M'), K('Zoom in / out / fit', '= / - / \\'), K('Safe-area guides', 'G'), K('Playback sync readout', 'Shift+D'), K('Proxies on / off', 'P'), K('Export / Save / Open', 'Ctrl+E / Ctrl+S / Ctrl+O'),
     h('h3', {}, 'Mouse'), K('Move · duplicate · insert-drop · no snap', 'Drag / Alt / Ctrl / Shift'), K('Roll a cut between two clips', 'Alt+drag edge'), K('Fade handles', 'Top-corner dots'), K('Zoom timeline / scroll tracks', 'Ctrl+wheel / Shift+wheel'), K('Pan', 'Middle-drag'), K('Hover-scrub a bin thumbnail', 'Mouse over'),
   ), h('p', { html: '<b>Auto cross-fade:</b> with <kbd>X</kbd> on, drag a clip so it overlaps its neighbour and the overlap becomes a transition (video and audio). Drop a clip <i>inside</i> a longer one and it is spliced in with fades on both sides. Turn it off and drops overwrite instead (red preview). <b>Ripple</b> (<kbd>R</kbd>) makes deletes and trims pull later clips along.<br><b>Beat editing:</b> select your music clip → <b>♪ Beats</b> drops markers on the beat; everything snaps to them. Select a bunch of clips → <b>Cut to beat</b> in the inspector lays them out on the beat grid.<br><b>Export</b> decodes every frame exactly and writes an MP4 faster than real time, straight from your original files. Projects save as small <code>.reel.json</code> files; re-import the media and it relinks automatically by file name.' }),
-    h('div', { class: 'foot' }, h('button', { class: 'primary', onclick: closeModal }, 'Got it'))));
+    h('div', { class: 'foot' }, h('span', { class: 'ver' }, verLine()), h('button', { onclick: () => checkUpdates(true) }, 'Check for updates'), h('button', { class: 'primary', onclick: closeModal }, 'Got it'))));
 }
 function exportFormats() {
   const C = [['MP4 · H.264 / AAC', ['video/mp4;codecs=avc1.640033,mp4a.40.2', 'video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4']], ['WebM · VP9 / Opus', ['video/webm;codecs=vp9,opus']], ['WebM · VP8 / Opus', ['video/webm;codecs=vp8,opus', 'video/webm']]];
@@ -811,6 +811,37 @@ function boot() {
   let seen = false; try { seen = !!localStorage.getItem('reeledit.seenHelp'); localStorage.setItem('reeledit.seenHelp', '1'); } catch (e) { }
   if (!seen) setTimeout(() => toast('Drop some clips in to start — press ? for shortcuts'), 600);
 }
+/* ---------- version & updates ----------
+   APP_VER comes from version.json at build time. The feed is a small public latest.json
+   ({version, build, date, url, notes}); a higher build number than ours means a newer release. */
+const fmtDay = d => { try { return new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch (e) { return d; } };
+const verLine = () => `Reel Edit v${APP_VER.version} · build ${APP_VER.build} · ${fmtDay(APP_VER.date)}`;
+let newRelease = null;
+async function checkUpdates(manual) {
+  if (!APP_VER.feed) { if (manual) toast('No update feed is set for this build', true); return; }
+  try {
+    const r = await fetch(APP_VER.feed + '?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    if (!(+j.build > APP_VER.build)) { if (manual) toast(`You're up to date: v${APP_VER.version} (build ${APP_VER.build})`); return; }
+    newRelease = j;
+    const b = $('#upd'); b.textContent = `Update available: v${j.version}`; b.title = `Build ${j.build} · ${fmtDay(j.date)} — you have v${APP_VER.version} (build ${APP_VER.build})`; b.hidden = false;
+    if (manual) openUpdate();
+  } catch (e) { if (manual) toast("Couldn't check for updates: " + e.message, true); }
+}
+function openUpdate() {
+  const j = newRelease; if (!j) return;
+  openModal(h('div', {}, h('h2', {}, `Reel Edit v${j.version} is available`),
+    h('p', {}, `Build ${j.build} · released ${fmtDay(j.date)}. You have v${APP_VER.version} (build ${APP_VER.build}, ${fmtDay(APP_VER.date)}).`),
+    j.notes ? h('p', { style: 'white-space:pre-line' }, j.notes) : null,
+    h('p', { style: 'color:var(--tx2)' }, DESKTOP ? 'Download the new zip, close Reel Edit and replace ReelEdit.exe with the new one. Your settings and autosave stay.' : 'Download the new zip and open the new ReelEdit.html.'),
+    h('div', { class: 'foot' }, h('button', { onclick: closeModal }, 'Later'),
+      j.url ? h('button', { class: 'primary', onclick: () => { window.open(j.url, '_blank', 'noopener'); closeModal(); } }, 'Download') : null)));
+}
+$('#ver').textContent = 'v' + APP_VER.version; $('#ver').title = verLine();
+$('#upd').onclick = openUpdate;
+setTimeout(() => checkUpdates(false), 4000); setInterval(() => checkUpdates(false), 6 * 3600e3);
+
 /* ---------- desktop shell bridge (ReelEdit.exe hosts this page in WebView2) ---------- */
 const DESKTOP = !!(window.chrome && window.chrome.webview);
 if (DESKTOP) {

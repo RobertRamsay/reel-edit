@@ -12,7 +12,14 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Product>Reel Edit</Product>
     <Company>Polytricity</Company>
-    <Version>1.0.0</Version>
+    <!-- version and build number come from ../version.json, same as the web page -->
+    <VerJson>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\version.json'))</VerJson>
+    <Version>$([System.Text.RegularExpressions.Regex]::Replace($(VerJson), '(?s).*"version"\s*:\s*"([^"]+)".*', '$1'))</Version>
+    <AppBuild>$([System.Text.RegularExpressions.Regex]::Replace($(VerJson), '(?s).*"build"\s*:\s*(\d+).*', '$1'))</AppBuild>
+    <FileVersion>$(Version).$(AppBuild)</FileVersion>
+    <AssemblyVersion>$(Version).$(AppBuild)</AssemblyVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 
