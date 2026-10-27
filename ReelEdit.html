@@ -145,6 +145,8 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 .tname{font-weight:700;padding:2px 6px;min-width:30px;font-size:11px;background:var(--bg3)}
 .th.target .tname{background:var(--accd);border-color:var(--acc);color:#ffd2b3}
 .tbtns{display:flex;gap:2px;margin-left:auto}
+.tmeter{position:absolute;left:6px;right:6px;bottom:2px;height:3px;border-radius:2px;pointer-events:none;background:linear-gradient(90deg,#36946d 0 70%,#cfae36 70% 90%,#d94452 90%)}
+.tmeter.clip{box-shadow:0 0 4px #d94452}
 .tbtns button{padding:2px 3px;background:none;border-color:transparent;color:var(--tx3)}
 .tbtns button:hover{color:var(--tx);background:var(--bg3)}
 .tbtns button.on{color:var(--ylw);background:rgba(255,209,102,.12);border-color:transparent}
@@ -707,7 +709,10 @@ function ensureAudio() {
 const pool = []; // {el, kind, mediaId, clipId, src, gain}
 function attachAudio(p) {
   if (!actx || p.src || !(p.role === 'av' || p.role === 'snd')) return;
-  try { p.src = actx.createMediaElementSource(p.el); p.gain = actx.createGain(); p.gain.gain.value = 0; p.src.connect(p.gain); p.gain.connect(master); } catch (e) { console.warn(e); }
+  try {
+    p.src = actx.createMediaElementSource(p.el); p.chain = makeChain(actx); p.gain = actx.createGain(); p.gain.gain.value = 0;
+    p.src.connect(p.chain.input); p.chain.output.connect(p.gain); p.gain.connect(master);
+  } catch (e) { console.warn(e); }
 }
 /* Player roles per clip:
    av  – original video element: picture + sound (no proxy)
@@ -773,7 +778,7 @@ function clipGain(c, t) {
   const [pr, nx] = neighbors(c);
   if (pr && cend(pr) > c.start + EPS && t < cend(pr)) g *= xfIn(clamp((t - c.start) / (cend(pr) - c.start), 0, 1), (c.xf || xfDefault()).type);
   if (nx && nx.start < cend(c) - EPS && t >= nx.start) g *= xfOut(clamp((t - nx.start) / (cend(c) - nx.start), 0, 1), (nx.xf || xfDefault()).type);
-  return Math.max(0, g);
+  return Math.max(0, g * envGain(c, t));
 }
 let lastScrub = 0, hqTimer = 0, resyncQueued = false;
 function resyncSoon() { if (resyncQueued) return; resyncQueued = true; setTimeout(() => { resyncQueued = false; if (!UI.playing) syncMedia(UI.t, false); }, 0); }
@@ -807,6 +812,7 @@ function syncMedia(t, playing) {
       if (!el.seeking && Math.abs(el.currentTime - target) > 0.5 / fps()) el.currentTime = target;
     }
     if (p.gain && actx) {
+      if (p.chain) p.chain.set(c);
       const g = (playing && active) ? clipGain(c, t) : 0;
       p.gain.gain.setTargetAtTime(g, actx.currentTime, 0.012);
     }
@@ -1095,6 +1101,213 @@ function drawSrcBar() {
   sbg.fillStyle = 'rgba(76,201,240,.22)'; sbg.fillRect(a, 0, b - a, H);
   sbg.fillStyle = '#4cc9f0'; sbg.fillRect(a, 0, 2 * k, H); sbg.fillRect(b - 2 * k, 0, 2 * k, H);
   const x = srcT() / d * W; sbg.fillStyle = '#ff8a3d'; sbg.fillRect(x - k, 0, 2 * k, H);
+}
+
+/* ============================================================
+   audio tools: volume points, EQ / pan, auto-ducking, noise reduction, track meters
+   ============================================================ */
+
+/* ---------- volume points ----------
+   c.env = [{ s, db }]: s is SOURCE time, so points stay on the sound through trims, splits and slips.
+   The line is a gain on top of the clip's Volume; between points it ramps in dB. */
+const ENV_TOP = 12, ENV_BOT = -40;
+const srcAt = (c, t) => c.in + (t - c.start) * c.speed;
+const tlAt = (c, s) => c.start + (s - c.in) / c.speed;
+function envDb(c, s) {
+  const e = c.env; if (!e || !e.length) return 0;
+  if (s <= e[0].s) return e[0].db;
+  const l = e[e.length - 1]; if (s >= l.s) return l.db;
+  let i = 1; while (e[i].s < s) i++;
+  const a = e[i - 1], b = e[i]; return a.db + (b.db - a.db) * (s - a.s) / ((b.s - a.s) || 1);
+}
+const envGain = (c, t) => c.env && c.env.length ? dbToVol(envDb(c, srcAt(c, t))) : 1;
+const envY = (db, top, hh) => top + (ENV_TOP - db) / (ENV_TOP - ENV_BOT) * hh;
+const envDbAtY = (y, top, hh) => clamp(ENV_TOP - (y - top) / hh * (ENV_TOP - ENV_BOT), ENV_BOT, ENV_TOP);
+const hasEnvLine = c => c.kind === 'audio';
+// keep points ordered, inside the clip's source range, and one per instant (the later one wins)
+function tidyEnv(c) {
+  const out = [];
+  for (const p of (c.env || []).slice().sort((a, b) => a.s - b.s)) {
+    const q2 = { s: clamp(p.s, c.in, c.out), db: clamp(p.db, ENV_BOT, ENV_TOP) };
+    if (out.length && Math.abs(out[out.length - 1].s - q2.s) < 1e-4) out[out.length - 1] = q2; else out.push(q2);
+  }
+  c.env = out.length ? out : null;
+}
+function drawEnvTL(g, c, x0, x1, top, hh, sel) {
+  const e = c.env || [], col = sel ? '#ffd166' : 'rgba(255,209,102,.7)';
+  g.strokeStyle = col; g.lineWidth = 1.3; g.beginPath();
+  const a = Math.max(x0, -2), b = Math.min(x1, TW + 2);
+  if (!e.length) { const y = envY(0, top, hh); g.moveTo(a, y); g.lineTo(b, y); }
+  else {
+    g.moveTo(a, envY(envDb(c, srcAt(c, T(a))), top, hh));
+    for (const p of e) { const x = X(tlAt(c, p.s)); if (x > a && x < b) g.lineTo(x, envY(p.db, top, hh)); }
+    g.lineTo(b, envY(envDb(c, srcAt(c, T(b))), top, hh));
+  }
+  g.stroke();
+  g.fillStyle = col;
+  for (const p of e) { const x = X(tlAt(c, p.s)); if (x >= x0 - 3 && x <= x1 + 3) g.fillRect(x - 3, envY(p.db, top, hh) - 3, 6, 6); }
+}
+// where a clip's volume line is on screen (null when the clip has no line)
+function envHit(c, lay, x, y) {
+  if (!hasEnvLine(c)) return null;
+  const top = lay.y + 2 + 14, hh = lay.h - 4 - 14; if (hh < 16) return null;
+  const e = c.env || [];
+  for (let i = 0; i < e.length; i++) { const px = X(tlAt(c, e[i].s)), py = envY(e[i].db, top, hh); if (Math.abs(px - x) <= 5 && Math.abs(py - y) <= 5) return { zone: 'envPt', i, top, hh }; }
+  const ly = envY(envDb(c, srcAt(c, T(x))), top, hh);
+  return Math.abs(ly - y) <= 4 ? { zone: 'env', top, hh } : null;
+}
+
+/* ---------- EQ and pan ----------
+   every sound player (and each clip in an export mix) runs through high-pass → low shelf → mid
+   bell → high shelf → pan; at flat settings it's transparent */
+const EQ0 = { hp: 0, low: 0, mid: 0, high: 0 };
+const EQ_PRESETS = { Flat: EQ0, Voice: { hp: 100, low: -2, mid: 2, high: 3 }, Warm: { hp: 0, low: 3, mid: 0, high: -2 }, Bright: { hp: 60, low: -1, mid: 0, high: 4 }, 'Music bed': { hp: 40, low: 0, mid: -4, high: 0 } };
+function makeChain(ctx) {
+  const bq = (type, f, q2) => { const n = ctx.createBiquadFilter(); n.type = type; n.frequency.value = f; if (q2 != null) n.Q.value = q2; return n; };
+  // a high-pass filter's Q is in dB here: −3 dB is Butterworth, flat with no bump at the cutoff
+  const hp = bq('highpass', 10, -3.0103), lo = bq('lowshelf', 150), mi = bq('peaking', 1200, 0.8), hi = bq('highshelf', 6000), pan = ctx.createStereoPanner();
+  hp.connect(lo); lo.connect(mi); mi.connect(hi); hi.connect(pan);
+  let key = '';
+  return { input: hp, output: pan, set(c) {
+    const q2 = c.eq || EQ0, k = `${q2.hp}|${q2.low}|${q2.mid}|${q2.high}|${c.pan || 0}`; if (k === key) return; key = k;
+    hp.frequency.value = q2.hp || 10; lo.gain.value = q2.low || 0; mi.gain.value = q2.mid || 0; hi.gain.value = q2.high || 0; pan.pan.value = c.pan || 0;
+  } };
+}
+const eqOn = c => !!(c.eq && (c.eq.hp || c.eq.low || c.eq.mid || c.eq.high)) || !!c.pan;
+
+/* ---------- auto-ducking ---------- */
+// timeline spans where any clip outside `exclude` is audible above −30 dB (from the waveform peaks)
+function soundSpans(exclude) {
+  const step = 0.05, n = Math.ceil(tlEnd() / step) + 1, lv = new Float32Array(n);
+  for (const c of P.clips) {
+    if (exclude.has(c.id) || !c.media || !(c.kind === 'audio' || c.kind === 'video')) continue;
+    const m = media.get(c.media); if (!m || !m.peaks || m.offline) continue;
+    const d = m.peaks.data, r = m.peaks.rate;
+    for (let i = Math.max(0, Math.floor(c.start / step)); i < n && i * step < cend(c); i++) {
+      const t = i * step, gn = clipGain(c, t); if (!gn) continue;
+      const s = srcAt(c, t); let pk = 0;
+      for (let j = Math.floor(s * r), j1 = Math.ceil((s + step * c.speed) * r); j < j1 && j < d.length; j++) if (d[j] > pk) pk = d[j];
+      if (pk * gn > lv[i]) lv[i] = pk * gn;
+    }
+  }
+  const spans = [];
+  for (let i = 0; i < n; i++) {
+    if (lv[i] < 0.032) continue;
+    const t = i * step, l = spans[spans.length - 1];
+    if (l && t - l[1] < 0.9) l[1] = t + step; else spans.push([t, t + step]); // bridge pauses between words
+  }
+  return spans.filter(([a, b]) => b - a >= 0.2);
+}
+function cmdDuck(cs, db = -12) {
+  cs = cs.filter(c => c.kind === 'audio');
+  if (!cs.length) return toast('Select the music clip(s) to duck — audio clips on an audio track', true);
+  const spans = soundSpans(new Set(cs.map(c => c.id)));
+  if (!spans.length) return toast('No speech or other sound found on the other tracks to duck under', true);
+  let hits = 0;
+  edit(() => {
+    for (const c of cs) {
+      const pts = [];
+      for (const [a, b] of spans) {
+        if (b + 0.6 <= c.start || a - 0.3 >= cend(c)) continue;
+        hits++;
+        pts.push({ t: a - 0.3, db: 0 }, { t: a, db }, { t: b, db }, { t: b + 0.6, db: 0 });
+      }
+      c.env = pts.map(p => ({ s: srcAt(c, clamp(p.t, c.start, cend(c))), db: p.db })); tidyEnv(c);
+    }
+  }, () => hits ? `Ducked ${fmtDb(db)} under ${hits} passage${hits > 1 ? 's' : ''} — drag the yellow points to fine-tune` : 'Nothing to duck under inside the selected clips');
+}
+
+/* ---------- noise reduction ----------
+   spectral gating: learn the noise spectrum from the quietest 10% of the recording, then turn each
+   frequency down where it's no louder than that noise. Runs in a worker; the result is a new WAV. */
+function denoiseWork(L, R, beta, floor, prog) {
+  const N = 2048, Hp = 512, n = L.length, half = N / 2, lg = Math.log2(N);
+  const rev = new Uint32Array(N); for (let i = 0; i < N; i++) { let r = 0; for (let b = 0; b < lg; b++) r |= ((i >> b) & 1) << (lg - 1 - b); rev[i] = r; }
+  const cs = new Float64Array(half), sn = new Float64Array(half); for (let i = 0; i < half; i++) { cs[i] = Math.cos(2 * Math.PI * i / N); sn[i] = -Math.sin(2 * Math.PI * i / N); }
+  const fft = (re, im) => {
+    for (let i = 0; i < N; i++) { const j = rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    for (let sz = 2; sz <= N; sz <<= 1) {
+      const hs = sz >> 1, st = N / sz;
+      for (let i = 0; i < N; i += sz) for (let j = 0, k = 0; j < hs; j++, k += st) {
+        const a = i + j, b = a + hs, tr = re[b] * cs[k] - im[b] * sn[k], ti = re[b] * sn[k] + im[b] * cs[k];
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+      }
+    }
+  };
+  const win = new Float64Array(N); for (let i = 0; i < N; i++) win[i] = Math.sqrt(0.5 - 0.5 * Math.cos(2 * Math.PI * i / N));
+  const F = Math.ceil((n + N) / Hp), re = new Float64Array(N), im = new Float64Array(N);
+  // both channels in one complex FFT: left in the real part, right in the imaginary part
+  const load = f => { const p0 = f * Hp - N; for (let j = 0; j < N; j++) { const i = p0 + j, w = win[j]; re[j] = i >= 0 && i < n ? L[i] * w : 0; im[j] = R && i >= 0 && i < n ? R[i] * w : 0; } };
+  const pow = k => { const k2 = (N - k) % N, ar = (re[k] + re[k2]) / 2, ai = (im[k] - im[k2]) / 2, br = (im[k] + im[k2]) / 2, bi = (re[k2] - re[k]) / 2; return ar * ar + ai * ai + br * br + bi * bi; };
+  const en = new Float64Array(F);
+  for (let f = 0; f < F; f++) { const p0 = f * Hp - N; let s = 0; for (let j = 0; j < N; j++) { const i = p0 + j; if (i >= 0 && i < n) { const v = L[i]; s += v * v; if (R) s += R[i] * R[i]; } } en[f] = s; }
+  const live = [...en.keys()].filter(f => en[f] > 1e-10).sort((a, b) => en[a] - en[b]);
+  const quiet = live.slice(0, Math.max(1, Math.floor(live.length * 0.1)));
+  const noise = new Float64Array(half + 1);
+  for (const f of quiet) { load(f); fft(re, im); for (let k = 0; k <= half; k++) noise[k] += pow(k) / quiet.length; }
+  const outL = new Float32Array(n), outR = R ? new Float32Array(n) : null, gs = new Float64Array(half + 1).fill(1), gk = new Float64Array(half + 1);
+  for (let f = 0; f < F; f++) {
+    load(f); fft(re, im);
+    for (let k = 0; k <= half; k++) { const g = Math.max(floor, 1 - beta * noise[k] / (pow(k) + 1e-20)); gs[k] = g > gs[k] ? g : 0.5 * g + 0.5 * gs[k]; } // quick to open, slower to close: less "musical" noise
+    for (let k = 0; k <= half; k++) gk[k] = (gs[Math.max(0, k - 1)] + gs[k] + gs[Math.min(half, k + 1)]) / 3;
+    for (let k = 0; k < N; k++) { const g = gk[k <= half ? k : N - k]; re[k] *= g; im[k] *= g; }
+    for (let k = 0; k < N; k++) im[k] = -im[k]; fft(re, im); // inverse FFT via conjugation
+    const p0 = f * Hp - N;
+    for (let j = 0; j < N; j++) { const i = p0 + j; if (i < 0 || i >= n) continue; const w = win[j] / (N * 2); outL[i] += re[j] * w; if (outR) outR[i] -= im[j] * w; }
+    if (f % 500 === 0) prog(f / F);
+  }
+  return outR ? [outL, outR] : [outL];
+}
+const NR_LEVELS = { light: [1.5, 0.3], medium: [2.5, 0.15], strong: [4, 0.07] };
+async function cleanAudio(m, level = 'medium') {
+  if (m.offline) return null;
+  const bar = h('i'), lab = h('div', { class: 'note' }, 'Reading the sound…');
+  openModal(h('div', {}, h('h2', {}, 'Reducing noise · ' + m.name), h('div', { class: 'pbar' }, bar), lab));
+  const url = URL.createObjectURL(new Blob([`${denoiseWork}\nonmessage = e => { const o = denoiseWork(e.data.L, e.data.R, e.data.beta, e.data.floor, p => postMessage({ p })); postMessage({ out: o }, o.map(a => a.buffer)); };`], { type: 'text/javascript' }));
+  const w = new Worker(url);
+  try {
+    const buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(await (m.sndUrl ? (await fetch(m.sndUrl)).arrayBuffer() : m.file.arrayBuffer()));
+    const L = new Float32Array(buf.getChannelData(0)), R = buf.numberOfChannels > 1 ? new Float32Array(buf.getChannelData(1)) : null;
+    const [beta, floor] = NR_LEVELS[level] || NR_LEVELS.medium;
+    lab.textContent = 'Learning the background noise and cleaning…';
+    const out = await new Promise((res, rej) => {
+      w.onmessage = e => { if (e.data.out) res(e.data.out); else bar.style.width = (e.data.p * 100).toFixed(1) + '%'; };
+      w.onerror = e => rej(new Error(e.message || 'worker failed'));
+      w.postMessage({ L, R, beta, floor }, [L.buffer].concat(R ? [R.buffer] : []));
+    });
+    const name = m.name.replace(/( \((audio|clean)\))*\.[^.]+$/, '') + ' (clean).wav';
+    const [a] = await importFiles([new File([wavBlob(out, buf.sampleRate)], name, { type: 'audio/wav' })], { quiet: true });
+    return a || null;
+  } catch (e) { toast("Couldn't reduce noise: " + e.message, true); return null; }
+  finally { w.terminate(); URL.revokeObjectURL(url); $('#modal').hidden = true; }
+}
+// clip: audio clips switch to the cleaned file; a video clip's sound goes to an audio track as the clean copy
+async function cmdDenoise(c, level) {
+  const m = media.get(c.media); if (!m) return;
+  if (c.kind === 'video' && m.hasAudio === false) return toast('This clip has no sound', true);
+  const a = await cleanAudio(m, level); if (!a) return;
+  if (c.kind === 'audio') edit(() => { c.media = a.id; c.name = a.name; }, 'Noise reduced — the clip now plays ' + a.name);
+  else detachAudio(c, a.id);
+  renderBin();
+}
+
+/* ---------- track meters ---------- */
+// per-track level from the waveform peaks and each clip's gain (pre-EQ), drawn in the track heads
+const TMET = new Map(); // track id → { el, v }
+function updTrackMeters(t, playing) {
+  const lv = new Map();
+  if (playing) for (const c of P.clips) {
+    if (!c.media || !(c.kind === 'audio' || c.kind === 'video') || t < c.start || t >= cend(c)) continue;
+    const m = media.get(c.media); if (!m || !m.peaks) continue;
+    const d = m.peaks.data, r = m.peaks.rate, i = Math.floor(srcAt(c, t) * r);
+    let pk = 0; for (let j = Math.max(0, i - 2); j <= i + 2 && j < d.length; j++) if (d[j] > pk) pk = d[j];
+    const v = pk * clipGain(c, t); if (v > (lv.get(c.track) || 0)) lv.set(c.track, v);
+  }
+  for (const [tid, o] of TMET) {
+    const v = Math.max(lv.get(tid) || 0, o.v * 0.88); if (Math.abs(v - o.v) < 1e-4 && v < 1e-3) continue;
+    o.v = v; const k = clamp((20 * Math.log10(v + 1e-9) + 60) / 60, 0, 1);
+    o.el.style.clipPath = `inset(0 ${((1 - k) * 100).toFixed(1)}% 0 0)`; o.el.classList.toggle('clip', v >= 0.99);
+  }
 }
 
 /* ============================================================
@@ -1496,7 +1709,8 @@ async function mixAudio(start, end, sr) {
     const buf = cache.get(m.id); if (!buf) continue;
     const s = Math.max(c.start, start), e = Math.min(cend(c), end);
     const src = ctx.createBufferSource(), gn = ctx.createGain();
-    src.buffer = buf; src.playbackRate.value = c.speed; src.connect(gn); gn.connect(ctx.destination);
+    src.buffer = buf; src.playbackRate.value = c.speed; gn.connect(ctx.destination);
+    if (eqOn(c)) { const ch = makeChain(ctx); ch.set(c); src.connect(ch.input); ch.output.connect(gn); } else src.connect(gn);
     gn.gain.setValueAtTime(clipGain(c, s), s - start);
     for (let t = s + 0.01; t < e; t += 0.01) gn.gain.linearRampToValueAtTime(clipGain(c, t), t - start);
     gn.gain.linearRampToValueAtTime(clipGain(c, e - 1e-4), e - start);
@@ -1579,15 +1793,17 @@ function trakBox(id, isV, ts, mediaDur, durMs, w, h, entry, durs, sizes, offsets
   return mbox('trak', tkhd, edts, mbox('mdia', mdhd, hdlr, mbox('minf', xmhd, dinf, stblBox(entry, durs, sizes, offsets, keys, ctts))));
 }
 function muxMP4(v, a) {
-  // v: {w,h,fps,avcC,samples:[{data,key,ts}]}  a: {sr,codec,desc,bitrate,chunks:[{data,dur}],delay,preSkip} | null
+  // v: {w,h,fps,avcC,samples:[{data,key,ts}]} | null (audio-only .m4a)  a: {sr,codec,desc,bitrate,chunks:[{data,dur}],delay,preSkip} | null
+  if (!v) v = { w: 0, h: 0, fps: 1, samples: [], none: true };
   const vts = v.fps * 1000, fd = 1000;
   const pts = v.samples.map(s => Math.round(s.ts * vts / 1e6));
   const sorted = [...pts].sort((x, y) => x - y), mono = pts.every((p, i) => p === sorted[i]);
   const dts = mono ? pts : sorted, ctts = mono ? null : pts.map((p, i) => p - dts[i]);
   const vdurs = dts.map((d, i) => i + 1 < dts.length ? dts[i + 1] - d : fd);
-  const vDurTicks = dts.length ? dts[dts.length - 1] + fd - dts[0] : 0, durMs = Math.round(vDurTicks / vts * 1000);
+  const vDurTicks = dts.length ? dts[dts.length - 1] + fd - dts[0] : 0;
+  let durMs = Math.round(vDurTicks / vts * 1000);
   const vsizes = v.samples.map(s => s.data.length), vkeys = []; v.samples.forEach((s, i) => { if (s.key) vkeys.push(i + 1); });
-  const avc1 = mbox('avc1', mu8(0, 0, 0, 0, 0, 0), mu16(1), mu16(0), mu16(0), mu32(0), mu32(0), mu32(0), mu16(v.w), mu16(v.h), mu32(0x480000), mu32(0x480000), mu32(0), mu16(1), new Uint8Array(32), mu16(0x18), mu16(0xffff), mbox('avcC', v.avcC));
+  const avc1 = v.none ? null : mbox('avc1', mu8(0, 0, 0, 0, 0, 0), mu16(1), mu16(0), mu16(0), mu32(0), mu32(0), mu32(0), mu16(v.w), mu16(v.h), mu32(0x480000), mu32(0x480000), mu32(0), mu16(1), new Uint8Array(32), mu16(0x18), mu16(0xffff), mbox('avcC', v.avcC));
   let aentry = null, adurs = null, asizes = null, aDur = 0;
   if (a) {
     const isOpus = a.codec === 'opus';
@@ -1596,12 +1812,15 @@ function muxMP4(v, a) {
     const dflt = isOpus ? 960 : 1024;
     adurs = a.chunks.map(c => c.dur ? Math.round(c.dur * a.sr / 1e6) || dflt : dflt); asizes = a.chunks.map(c => c.data.length);
     aDur = adurs.reduce((s, x) => s + x, 0);
+    if (v.none) durMs = Math.round(aDur / a.sr * 1000);
   }
-  const ftyp = mbox('ftyp', m4('isom'), mu32(0x200), m4('isom'), m4('iso2'), m4('avc1'), m4('mp41'));
+  const ftyp = v.none ? mbox('ftyp', m4('M4A '), mu32(0x200), m4('isom'), m4('iso2'), m4('M4A '), m4('mp41'))
+    : mbox('ftyp', m4('isom'), mu32(0x200), m4('isom'), m4('iso2'), m4('avc1'), m4('mp41'));
+  const aid = v.none ? 1 : 2;
   const build = (vo, ao) => mbox('moov',
-    mfull('mvhd', 0, 0, mu32(0), mu32(0), mu32(1000), mu32(durMs), mu32(0x10000), mu16(0x100), new Uint8Array(10), MATRIX, new Uint8Array(24), mu32(a ? 3 : 2)),
-    trakBox(1, true, vts, vDurTicks, durMs, v.w, v.h, avc1, vdurs, vsizes, vo, vkeys, ctts, 0),
-    a ? trakBox(2, false, a.sr, aDur, Math.min(durMs, Math.round(aDur / a.sr * 1000)), 0, 0, aentry, adurs, asizes, ao, null, null, a.codec === 'opus' ? 0 : (a.delay || 0)) : new Uint8Array(0));
+    mfull('mvhd', 0, 0, mu32(0), mu32(0), mu32(1000), mu32(durMs), mu32(0x10000), mu16(0x100), new Uint8Array(10), MATRIX, new Uint8Array(24), mu32(aid + 1)),
+    v.none ? new Uint8Array(0) : trakBox(1, true, vts, vDurTicks, durMs, v.w, v.h, avc1, vdurs, vsizes, vo, vkeys, ctts, 0),
+    a ? trakBox(aid, false, a.sr, aDur, Math.min(durMs, Math.round(aDur / a.sr * 1000)), 0, 0, aentry, adurs, asizes, ao, null, null, a.codec === 'opus' ? 0 : (a.delay || 0)) : new Uint8Array(0));
   const zeros = n => new Array(n).fill(0);
   const moovLen = build(zeros(vsizes.length), a ? zeros(asizes.length) : []).length;
   let off = ftyp.length + moovLen + 16; const vo = [], ao = [];
@@ -1609,7 +1828,7 @@ function muxMP4(v, a) {
   if (a) for (const s of asizes) { ao.push(off); off += s; }
   const moov = build(vo, ao), mdatLen = off - ftyp.length - moovLen;
   const mdatHdr = catU8([mu32(1), m4('mdat'), mu64(mdatLen)]);
-  return new Blob([ftyp, moov, mdatHdr, ...v.samples.map(s => s.data), ...(a ? a.chunks.map(c => c.data) : [])], { type: 'video/mp4' });
+  return new Blob([ftyp, moov, mdatHdr, ...v.samples.map(s => s.data), ...(a ? a.chunks.map(c => c.data) : [])], { type: v.none ? 'audio/mp4' : 'video/mp4' });
 }
 
 /* ---------- pixels → encoder ---------- */
@@ -1723,15 +1942,31 @@ async function exportOffline(o, ui) {
     ui.prog(0.91, 'Mixing audio…');
     const mix = await mixAudio(start, end, SR);
     if (EXP.cancelled) throw new Error('cancelled');
-    if (mix) {
-      audio = await encodeAudio(mix, acfg, p => ui.prog(0.92 + p * 0.05, 'Encoding audio…'));
-      if (audio.codec === 'opus') audio.preSkip = audio.desc && audio.desc.length >= 12 ? audio.desc[10] | (audio.desc[11] << 8) : 312;
-      else { ui.prog(0.97, 'Aligning audio…'); const d = await measureAudioDelay(audio, mix); audio.delay = d == null ? 0 : d; }
-    }
+    if (mix) audio = await encodeMix(mix, acfg, (p, s) => ui.prog(0.92 + p * 0.06, s));
   }
   ui.prog(0.99, 'Writing MP4…');
   const blob = muxMP4({ w: OW, h: OH, fps: fpsO, avcC, samples: vs }, audio);
   return { blob, frames: vs.length, fastFrames, secs: (performance.now() - t0) / 1000, audio: audio && audio.codec, delay: audio && (audio.delay || audio.preSkip) };
+}
+
+/* ---------- audio-only export: the timeline's mix as WAV or M4A (AAC) ---------- */
+async function encodeMix(mix, acfg, prog) {
+  const audio = await encodeAudio(mix, acfg, p => prog(p * 0.85, 'Encoding audio…'));
+  if (audio.codec === 'opus') audio.preSkip = audio.desc && audio.desc.length >= 12 ? audio.desc[10] | (audio.desc[11] << 8) : 312;
+  else { prog(0.9, 'Aligning audio…'); const d = await measureAudioDelay(audio, mix); audio.delay = d == null ? 0 : d; }
+  return audio;
+}
+async function exportAudioOnly(o, ui) {
+  const end0 = tlEnd(), start = o.range === 'io' ? (P.inPt ?? 0) : 0, end = o.range === 'io' ? (P.outPt ?? end0) : end0, t0 = performance.now();
+  ui.prog(0.05, 'Mixing audio…');
+  const mix = await mixAudio(start, end, 48000);
+  if (!mix) throw new Error('the timeline has no sound in this range');
+  if (EXP.cancelled) throw new Error('cancelled');
+  if (o.kind === 'wav') return { blob: wavBlob([mix.getChannelData(0), mix.getChannelData(1)], mix.sampleRate), ext: 'wav', secs: (performance.now() - t0) / 1000 };
+  const acfg = await pickAudio(48000); if (!acfg) throw new Error('no AAC/Opus encoder available — export WAV instead');
+  const audio = await encodeMix(mix, acfg, (p, s) => ui.prog(0.1 + p * 0.85, s));
+  ui.prog(0.98, 'Writing M4A…');
+  return { blob: muxMP4(null, audio), ext: 'm4a', secs: (performance.now() - t0) / 1000 };
 }
 
 /* ============================================================
@@ -1893,7 +2128,7 @@ function drawWaveTL(g, m, c, x0, x1, top, hh, col, mirror = true) {
     const tt = c.start + (px - x0) / UI.pps; let fm = 1;
     if (c.fadeIn > 0 && tt - c.start < c.fadeIn) fm = (tt - c.start) / c.fadeIn;
     if (c.fadeOut > 0 && cend(c) - tt < c.fadeOut) fm = Math.min(fm, (cend(c) - tt) / c.fadeOut);
-    const v = Math.min(1, Math.pow(pk, 0.7) * vol * fm) * (mirror ? hh / 2 : hh);
+    const v = Math.min(1, Math.pow(pk, 0.7) * vol * fm * envGain(c, tt)) * (mirror ? hh / 2 : hh);
     if (mirror) g.rect(px, mid - v, 1, Math.max(1, v * 2)); else g.rect(px, mid - v, 1, Math.max(1, v));
   }
   g.fill();
@@ -1925,6 +2160,7 @@ function drawClipTL(g, c, lay) {
     if (c.kind === 'video' && m.peaks && ch > 26 && !c.muted) { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(x0, y + hh - ch * 0.32, w, ch * 0.32); drawWaveTL(g, m, c, x0, x1, y + hh - ch * 0.32, ch * 0.32, 'rgba(120,220,170,.75)', false); }
   } else if (c.kind === 'audio') {
     drawWaveTL(g, m, c, x0, x1, cy + 2, ch - 4, c.muted ? 'rgba(150,150,150,.4)' : 'rgba(110,230,170,.85)');
+    if (ch >= 16 && (c.env || sel)) drawEnvTL(g, c, x0, x1, cy, ch, sel);
   } else if (c.kind === 'text') {
     g.fillStyle = 'rgba(255,255,255,.8)'; g.font = '700 12px "Segoe UI",sans-serif';
     g.fillText('T  ' + (c.text.str || '').replace(/\n/g, ' '), Math.max(x0, 0) + 6, cy + ch / 2 + 4);
@@ -1992,7 +2228,7 @@ const ICON = {
 };
 function renderHeads() {
   ensureTargets();
-  const inner = $('#headInner'); inner.innerHTML = '';
+  const inner = $('#headInner'); inner.innerHTML = ''; TMET.clear();
   for (const tr of P.tracks) {
     const isT = tr.id === (tr.type === 'video' ? UI.targetV : UI.targetA);
     const tb = (key, on, iconOn, iconOff, title, red) => h('button', { class: (on ? 'on' : '') + (red ? ' red' : ''), title, html: on ? iconOn : iconOff, onclick: () => { edit(() => { tr[key] = !tr[key]; }); renderHeads(); } });
@@ -2004,6 +2240,7 @@ function renderHeads() {
         tr.type === 'audio' ? h('button', { class: tr.solo ? 'on' : '', title: 'Solo', style: 'font-weight:800;font-size:11px;width:22px', onclick: () => { edit(() => { tr.solo = !tr.solo; }); renderHeads(); } }, 'S') : null,
         tb('locked', tr.locked, ICON.lock, ICON.unlock, 'Lock track', false)));
     row.addEventListener('contextmenu', e => { e.preventDefault(); trackMenu(e.clientX, e.clientY, tr); });
+    const mt = h('i', { class: 'tmeter', style: 'clip-path:inset(0 100% 0 0)' }); row.append(mt); TMET.set(tr.id, { el: mt, v: 0 });
     inner.append(row);
   }
   syncHeads();
@@ -2038,6 +2275,7 @@ function hit(x, y) {
       return { ...base, zone: best.zone, c, partner };
     }
     for (let i = 0; i < cs.length - 1; i++) { const A = cs[i], B = cs[i + 1]; if (B.start < cend(A) - EPS && t >= B.start && t <= cend(A)) return { ...base, zone: 'xf', A, B, c: B }; }
+    for (const c of cs) if (t >= c.start && t < cend(c)) { const eh = envHit(c, lay, x, y); if (eh && (eh.zone === 'envPt' || UI.sel.has(c.id))) return { ...base, ...eh, c }; }
   }
   let hc = null; for (const c of cs) if (t >= c.start && t < cend(c)) hc = c;
   if (hc) return { ...base, zone: 'clip', c: hc };
@@ -2049,7 +2287,8 @@ const HINTS = {
   fadeIn: 'Drag to set fade-in (video and audio)', fadeOut: 'Drag to set fade-out (video and audio)',
   xf: 'Transition — click to edit, right-click for types, Delete makes it a hard cut',
   ruler: 'Click or drag to scrub · M marker · I / O set range', marker: 'Click to jump · drag to move · double-click to rename · right-click to delete',
-  lane: 'Drag to box-select · right-click for gap tools', locked: 'Track is locked', sb: 'Drag to scroll',
+  lane: 'Drag to box-select · right-click for gap tools',
+  env: 'Volume line — click to add a point and drag it · Shift skips the 0 dB snap', envPt: 'Drag the volume point · Alt+click deletes it', locked: 'Track is locked', sb: 'Drag to scroll',
 };
 function setHint(s) { const el = $('#hint'); if (el.textContent !== s) el.textContent = s; }
 function hoverUpdate(x, y) {
@@ -2062,6 +2301,7 @@ function hoverUpdate(x, y) {
     case 'clip': cur = 'grab'; break; case 'xf': cur = 'pointer'; break;
     case 'trimL': case 'trimR': cur = H.partner ? 'col-resize' : 'ew-resize'; if (H.partner) hint += ' · Alt+drag rolls the cut (both clips)'; if (UI.ripple) hint += ' · ripple on'; else if (UI.autoX) hint += ' · drag over the neighbour to cross-fade'; break;
     case 'fadeIn': case 'fadeOut': cur = 'ew-resize'; break;
+    case 'env': cur = 'copy'; break; case 'envPt': cur = 'move'; break;
   }
   if (H.zone === 'ruler' || H.zone === 'marker') cur = 'pointer';
   tl.style.cursor = cur; setHint(hint); dirtyTL = true;
@@ -2105,6 +2345,13 @@ tl.addEventListener('pointerdown', e => {
     case 'ruler': UI.drag = { ...base, type: 'scrub' }; scrubTo(x); break;
     case 'marker': UI.drag = { ...base, type: 'marker', mk: H.mk, t0: H.mk.t }; break;
     case 'fadeIn': case 'fadeOut': selectOnly(H.c); UI.drag = { ...base, type: H.zone, c: H.c }; break;
+    case 'env': case 'envPt': {
+      const c = H.c; selectOnly(c);
+      if (H.zone === 'envPt' && e.altKey) { edit(() => { c.env.splice(H.i, 1); tidyEnv(c); }, 'Volume point deleted'); break; }
+      let i = H.i;
+      if (H.zone === 'env') { const s = srcAt(c, T(x)); c.env = (c.env || []).concat({ s, db: envDb(c, s) }).sort((a, b) => a.s - b.s); i = c.env.findIndex(p => p.s === s); }
+      UI.drag = { ...base, type: 'env', c, i, top: H.top, hh: H.hh, moved: H.zone === 'env' }; break;
+    }
     case 'trimL': case 'trimR': {
       const c = H.c; selectOnly(c);
       const o = { start: c.start, in: c.in, out: c.out, end: cend(c) };
@@ -2172,6 +2419,12 @@ tl.addEventListener('pointermove', e => {
       dirtyPV = true; break;
     }
     case 'trimL': case 'trimR': doTrim(d, x); break;
+    case 'env': {
+      const c = d.c, e2 = c.env, p = e2[d.i], lo = d.i > 0 ? e2[d.i - 1].s + 1e-3 : c.in, hi = d.i < e2.length - 1 ? e2[d.i + 1].s - 1e-3 : c.out;
+      p.s = clamp(srcAt(c, T(x)), lo, hi);
+      let db = envDbAtY(y, d.top, d.hh); if (!e.shiftKey && Math.abs(db) < 0.8) db = 0;
+      p.db = Math.round(db * 10) / 10; UI.info = fmtDb(p.db) + ' at ' + fmtTC(tlAt(c, p.s)); dirtyPV = true; break;
+    }
     case 'slip': {
       const c = d.c, L = srcLen(c), len = d.o.out - d.o.in;
       if (!isFinite(L)) { UI.info = 'Stills have nothing to slip'; break; }
@@ -2208,6 +2461,7 @@ function endDrag(e, cancel) {
       break;
     }
     case 'marker': if (!d.moved) { setTime(d.mk.t); } else commit(d.before); break;
+    case 'env': tidyEnv(d.c); commit(d.before); break;
     case 'trimL': case 'trimR': case 'fadeIn': case 'fadeOut': case 'slip':
       if (UI.autoX) ensureXf([d.c.track]); commit(d.before); break;
   }
@@ -2497,16 +2751,17 @@ function addGenerator(kind) {
   }, kind === 'text' ? 'Title added — edit it in the inspector' : 'Colour matte inserted at the playhead');
   renderHeads();
 }
-function detachAudio(c) {
+function detachAudio(c, mid) { // mid: put this media on the audio track instead (e.g. a noise-reduced copy)
   const m = media.get(c.media); if (!m || c.kind !== 'video') return;
   if (m.hasAudio === false) return toast('This clip has no audio track');
   edit(() => {
     ensureTargets();
     let tid = UI.targetA; if (!tid) tid = addTrack('audio').id;
     const a = structuredClone(c); a.id = uid('c'); a.kind = 'audio'; a.track = tid; a.xf = null; a.muted = false; a.name = c.name + ' (audio)';
+    if (mid) { a.media = mid; a.name = media.get(mid).name; }
     P.clips.push(a); cutRange(tid, a.start, cend(a), new Set([a.id])); c.muted = true;
     UI.sel = new Set([a.id]);
-  }, 'Audio detached to its own track');
+  }, mid ? 'Cleaned audio placed on its own track — the video clip is muted' : 'Audio detached to its own track');
   renderHeads();
 }
 function addMarker(t = UI.t, beat = false) {
@@ -2814,6 +3069,21 @@ function inspClip(c) {
       rowB('Mute', () => c.muted, v => { c.muted = v; }),
       h('div', { class: 'btnrow' }, h('button', { onclick: () => cmdNormalise([c]), disabled: !(m && m.peaks), title: 'Set the volume so the loudest moment of this clip peaks at −1 dB' }, 'Normalise'),
         h('button', { onclick: () => edit(() => { c.volume = 1; }) }, '0 dB'))));
+    if (c.kind === 'audio') B.append(sec(['Volume points', c.env ? h('button', { onclick: () => edit(() => { c.env = null; }, 'Volume points cleared') }, 'Clear') : null],
+      h('div', { class: 'note' }, c.env ? `${c.env.length} point${c.env.length > 1 ? 's' : ''} on the yellow line. Drag them; Alt+click deletes one.` : 'Click the yellow line on the selected clip to add a point, then drag it up or down.'),
+      h('div', { class: 'row' }, h('label', { title: 'Lower this clip wherever the other tracks have speech or sound' }, 'Duck under'), chips([-6, -12, -18].map(db => [fmtDb(db), false, () => cmdDuck([c], db), `Duck ${db} dB under the other tracks`])), h('span'))));
+    const q2 = () => c.eq || (c.eq = { ...EQ0 });
+    B.append(sec(['EQ & pan', h('button', { onclick: () => edit(() => { c.eq = null; c.pan = 0; }) }, 'Reset')],
+      chips(Object.entries(EQ_PRESETS).map(([k, v]) => [k, false, () => edit(() => { c.eq = { ...v }; }), 'EQ preset'])),
+      rowS('Low cut', () => String((c.eq || EQ0).hp), v => { q2().hp = +v; }, [['0', 'Off'], ['60', '60 Hz'], ['100', '100 Hz (voice)'], ['150', '150 Hz'], ['250', '250 Hz (phone)']]),
+      rowR('Bass', () => (c.eq || EQ0).low, v => { q2().low = v; }, { min: -12, max: 12, step: 0.5, fmt: fmtDb, def: 0 }),
+      rowR('Mids', () => (c.eq || EQ0).mid, v => { q2().mid = v; }, { min: -12, max: 12, step: 0.5, fmt: fmtDb, def: 0 }),
+      rowR('Treble', () => (c.eq || EQ0).high, v => { q2().high = v; }, { min: -12, max: 12, step: 0.5, fmt: fmtDb, def: 0 }),
+      rowR('Pan', () => c.pan || 0, v => { c.pan = v; }, { min: -1, max: 1, step: 0.05, fmt: v => Math.abs(v) < 0.025 ? 'Centre' : Math.round(Math.abs(v) * 100) + (v < 0 ? ' L' : ' R'), def: 0 })));
+    if (m && !m.offline && m.hasAudio !== false) B.append(sec('Clean up',
+      h('div', { class: 'row' }, h('label', { title: 'Learns the background hiss/hum from the quietest parts and removes it. Makes a cleaned copy of the sound.' }, 'Reduce noise'),
+        chips(Object.keys(NR_LEVELS).map(k => [k[0].toUpperCase() + k.slice(1), false, () => cmdDenoise(c, k)])), h('span')),
+      h('div', { class: 'note' }, c.kind === 'video' ? 'Puts a cleaned copy of the sound on an audio track and mutes the video clip.' : 'Switches this clip to a cleaned copy of the file (the original stays in the bin).')));
   }
   const maxF = Math.max(frame(), Math.min(10, cdur(c)));
   B.append(sec('Fades',
@@ -2975,6 +3245,9 @@ function clipMenu(x, y, c, t) {
     '-',
     c.kind === 'video' && m && m.hasAudio !== false ? { label: 'Detach audio', act: () => detachAudio(c) } : null,
     (c.kind === 'video' || c.kind === 'audio') && m && m.peaks ? { label: UI.sel.size > 1 ? 'Normalise selected (−1 dB peak)' : 'Normalise (−1 dB peak)', act: () => cmdNormalise(selClips()) } : null,
+    c.kind === 'audio' ? { label: 'Duck under other tracks (−12 dB)', act: () => cmdDuck(UI.sel.has(c.id) ? selClips() : [c]) } : null,
+    c.kind === 'audio' && c.env ? { label: 'Clear volume points', act: () => edit(() => { c.env = null; }, 'Volume points cleared') } : null,
+    (c.kind === 'video' || c.kind === 'audio') && m && !m.offline && m.hasAudio !== false ? { label: 'Reduce noise…', act: () => cmdDenoise(c, 'medium') } : null,
     (c.kind === 'video' || c.kind === 'audio') ? { label: c.muted ? 'Unmute clip' : 'Mute clip', act: () => edit(() => { c.muted = !c.muted; }) } : null,
     m && m.env ? { label: '♪ Detect beats → markers', act: () => cmdBeats(c) } : null,
     multi ? { label: 'Cut selected to beat (2 beats)', act: () => beatCut(2) } : null,
@@ -3014,6 +3287,7 @@ function binMenu(x, y, m) {
     m.type === 'video' && m.hasAudio !== false ? { label: 'Separate audio → new audio file', act: () => separateAudio(m), disabled: m.offline } : null,
     m.type === 'video' && m.hasAudio !== false ? { label: m.picOnly ? 'Use with its sound again' : 'Use picture only (mute its sound)', act: () => { m.picOnly = !m.picOnly; renderBin(); scheduleAutosave(); toast(m.picOnly ? m.name + ' now comes in muted' : m.name + ' now comes in with its sound'); } } : null,
     (m.type === 'video' && m.hasAudio !== false) || m.type === 'audio' ? { label: 'Save audio as WAV…', act: () => saveAudio(m), disabled: m.offline } : null,
+    (m.type === 'video' && m.hasAudio !== false) || m.type === 'audio' ? { label: 'Reduce noise → clean copy', act: async () => { const a = await cleanAudio(m); if (a) { UI.binSel = a.id; renderBin(); toast('Cleaned copy added: ' + a.name); } }, disabled: m.offline } : null,
     m.type === 'video' && canProxy(m) ? (m.proxy ? { label: 'Discard proxy (use original)', act: () => discardProxy(m) } : (m.proxyState && /queued|building/.test(m.proxyState.status)) ? { label: 'Cancel proxy', act: () => discardProxy(m) } : { label: 'Make proxy (smooth preview)', act: () => queueProxy(m) }) : null,
     m.info ? { head: m.info } : null,
     '-', { label: 'Relink to another file…', act: () => { pendingRelink = m; $('#fileIn').click(); } },
@@ -3115,7 +3389,8 @@ async function openExport() {
   const offline = await offlineSupported(), fm = exportFormats();
   if (!offline && !fm.length) return toast('This browser cannot export video — try Chrome or Edge', true);
   const hasIO = P.inPt != null || P.outPt != null;
-  const eng = h('select', {}, offline ? h('option', { value: 'offline' }, 'Frame-accurate · MP4 (H.264) — recommended') : null, fm.length ? h('option', { value: 'realtime' }, 'Real-time capture (legacy)') : null);
+  const eng = h('select', {}, offline ? h('option', { value: 'offline' }, 'Frame-accurate · MP4 (H.264) — recommended') : null, fm.length ? h('option', { value: 'realtime' }, 'Real-time capture (legacy)') : null,
+    h('option', { value: 'wav' }, 'Audio only · WAV (lossless)'), window.AudioEncoder ? h('option', { value: 'm4a' }, 'Audio only · M4A (AAC)') : null);
   const fmt = h('select', {}, fm.map((f, i) => h('option', { value: i }, f.l)));
   const rng = h('select', {}, h('option', { value: 'all' }, `Whole timeline · ${fmtTC(end)}`), hasIO ? h('option', { value: 'io', selected: true }, `In → Out · ${fmtTC((P.outPt ?? end) - (P.inPt ?? 0))}`) : null);
   // output frame: the project's, or another shape (the timeline is re-laid out into it, each clip keeping its Fit/Fill)
@@ -3137,21 +3412,22 @@ async function openExport() {
     anyProxy ? h('div', { class: 'row' }, h('label', {}, 'Source'), h('label', { style: 'display:flex;gap:6px;align-items:center' }, useProx, 'Render from proxies (smoother on heavy 4K clips, lower resolution)')) : null].filter(Boolean);
   const note = h('p', { class: 'note' }), why = !offline ? webCodecsMissingReason() : null;
   const warn = why ? h('p', { class: 'note', style: 'color:#ffb27a' }, 'Frame-accurate export (the fast, exact MP4 engine) is unavailable: ' + why) : null;
+  const vidRows = [h('div', { class: 'row' }, h('label', {}, 'Frame'), frm), h('div', { class: 'row' }, h('label', {}, 'Resolution'), res), h('div', { class: 'row' }, h('label', {}, 'Quality'), br)];
   const sync = () => {
-    const off = eng.value === 'offline'; rtRows.forEach(r => r.hidden = off);
-    note.textContent = off ? 'Decodes every source frame exactly and encodes faster than real time, straight from your original files — no dropped frames, sound locked to picture. You can switch tabs while it works.'
+    const off = eng.value === 'offline', aud = eng.value === 'wav' || eng.value === 'm4a'; rtRows.forEach(r => r.hidden = off || aud); vidRows.forEach(r => r.hidden = aud);
+    note.textContent = aud ? 'Mixes every track with its volume, volume points, EQ, pan and fades — the same sound as the video export, without the picture.' : off ? 'Decodes every source frame exactly and encodes faster than real time, straight from your original files — no dropped frames, sound locked to picture. You can switch tabs while it works.'
       : 'Plays the timeline in real time and records it, so a 60 s reel takes about 60 s. Keep this tab visible until it finishes.';
   };
   eng.onchange = sync;
   openModal(h('div', {}, h('h2', {}, 'Export video'),
     h('div', { class: 'row' }, h('label', {}, 'Engine'), eng),
     h('div', { class: 'row' }, h('label', {}, 'Range'), rng), ...rtRows,
-    h('div', { class: 'row' }, h('label', {}, 'Frame'), frm),
-    h('div', { class: 'row' }, h('label', {}, 'Resolution'), res), h('div', { class: 'row' }, h('label', {}, 'Quality'), br),
+    ...vidRows,
     h('div', { class: 'row' }, h('label', {}, 'File name'), nm), warn, note,
     h('div', { class: 'foot' }, h('button', { onclick: closeModal }, 'Cancel'), h('button', { class: 'primary', onclick: () => {
       const o = { range: rng.value, scale: +res.value, vbps: +br.value * 1e6, name: nm.value || 'reel' }, fr = frm.value.split('x').map(Number);
-      if (eng.value === 'offline') withFrame(fr, () => runOfflineExport(o)); else withFrame(fr, () => startExport({ ...o, mime: fm[+fmt.value].mime, mute: mute.checked, proxy: useProx.checked }));
+      if (eng.value === 'wav' || eng.value === 'm4a') runAudioExport({ ...o, kind: eng.value });
+      else if (eng.value === 'offline') withFrame(fr, () => runOfflineExport(o)); else withFrame(fr, () => startExport({ ...o, mime: fm[+fmt.value].mime, mute: mute.checked, proxy: useProx.checked }));
     } }, 'Render & download'))));
   sync();
 }
@@ -3174,6 +3450,22 @@ async function runOfflineExport(o) {
     const r = await exportOffline(o, ui);
     download(r.blob, o.name + '.mp4');
     toast(`Exported ${(r.blob.size / 1e6).toFixed(1)} MB · ${r.frames} frames in ${r.secs.toFixed(0)} s` + (r.audio ? '' : ' · no audio'));
+    window.__lastExport = r;
+  } catch (e) {
+    if (e.message === 'cancelled') toast('Export cancelled'); else { console.error(e); toast('Export failed: ' + e.message, true); }
+  } finally { EXP = null; $('#modal').hidden = true; }
+}
+async function runAudioExport(o) {
+  const end0 = tlEnd(), start = o.range === 'io' ? (P.inPt ?? 0) : 0, end = o.range === 'io' ? (P.outPt ?? end0) : end0;
+  if (end - start < frame()) return toast('Range is empty', true);
+  if (UI.playing) pause();
+  const bar = h('i'), lab = h('div', { class: 'note' }, 'Preparing…');
+  $('#mbox').innerHTML = ''; $('#mbox').append(h('h2', {}, 'Rendering audio · ' + o.name), h('div', { class: 'pbar' }, bar), lab, h('div', { class: 'foot' }, h('button', { onclick: cancelExport }, 'Cancel (Esc)')));
+  EXP = { offline: true, cancelled: false };
+  try {
+    const r = await exportAudioOnly(o, { prog: (p, s) => { bar.style.width = (p * 100).toFixed(1) + '%'; lab.textContent = s; } });
+    download(r.blob, o.name + '.' + r.ext);
+    toast(`Exported ${(r.blob.size / 1e6).toFixed(1)} MB ${r.ext.toUpperCase()} in ${r.secs.toFixed(1)} s`);
     window.__lastExport = r;
   } catch (e) {
     if (e.message === 'cancelled') toast('Export cancelled'); else { console.error(e); toast('Export failed: ' + e.message, true); }
@@ -3398,7 +3690,7 @@ function frameLoop(now) {
   if (dirtyPV) { dirtyPV = false; renderPreview(); }
   if (dirtyTL) { dirtyTL = false; phDirty = false; drawTimeline(); }
   else if (phDirty) { phDirty = false; blitTimeline(); }
-  drawMeter(); updTC();
+  drawMeter(); updTrackMeters(UI.t, UI.playing); updTC();
   // preview can't keep up at full size → drop to ½ (export is unaffected)
   if (UI.playing && !EXP && UI.pvScale === 1 && pvDrawMs > 14) { if (++slowFrames > 45) { slowFrames = 0; UI.pvScale = 0.5; $('#pvQ').value = '0.5'; resizePreview(); toast('Preview switched to ½ size to keep up with playback (export is still full size)'); } }
   else slowFrames = 0;

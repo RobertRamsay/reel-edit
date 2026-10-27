@@ -109,6 +109,21 @@ Separating sound from video
   Right-click an audio or video clip → Normalise (or the Normalise button in the inspector) sets its
   volume so its loudest moment peaks at −1 dB.
 
+Sound editing
+  Select an audio clip to edit its sound (the inspector has every control; right-click has the common ones):
+  * Volume points: a selected audio clip shows a yellow volume line. Click it to add a point and drag it
+    up or down (it snaps to 0 dB; hold Shift to avoid that). Alt+click a point deletes it. Points stay
+    with the sound when you trim or split the clip. Inspector → Volume points → Clear removes them.
+  * Duck under: lowers a music clip wherever the other tracks have speech or sound (−6, −12 or −18 dB),
+    by writing volume points you can then fine-tune.
+  * EQ & pan: low cut, bass, mids and treble (±12 dB), presets (Voice, Warm, Bright, Music bed), and pan.
+  * Reduce noise (Light / Medium / Strong): learns the background hiss or hum from the quietest parts and
+    removes it, as a cleaned copy "<name> (clean).wav". An audio clip switches to the copy; for a video
+    clip the copy goes on an audio track and the video is muted. Works best when the recording has a
+    few seconds without speech.
+  * Each track head has a level meter while playing.
+  * Export → Engine → "Audio only · WAV" or "Audio only · M4A (AAC)" renders just the mix.
+
 Version and updates
   The version shows next to the logo (hover it for the build number and date), in the ? panel and in the
   exe's window title. A few seconds after start-up, and every 6 hours after that, the app reads a small

@@ -4,7 +4,7 @@ const dir = __dirname;
 // version.json (repo root) is the single source of the version: the page gets APP_VER, the exe reads it in ReelEdit.csproj
 const V = JSON.parse(fs.readFileSync(path.join(dir, '..', 'version.json'), 'utf8'));
 const ver = `const APP_VER = ${JSON.stringify({ version: V.version, build: V.build, date: V.date, feed: V.feed })};\n`;
-const js = ver + ['core.js', 'proxy.js', 'export.js', 'timeline.js', 'ui.js'].map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+const js = ver + ['core.js', 'audio.js', 'proxy.js', 'export.js', 'timeline.js', 'ui.js'].map(f => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 const shell = fs.readFileSync(path.join(dir, 'shell.html'), 'utf8');
 const out = shell.replace('/*@@APP@@*/', () => js);
 fs.writeFileSync(path.join(dir, '..', 'ReelEdit.html'), out);

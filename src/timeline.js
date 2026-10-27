@@ -157,7 +157,7 @@ function drawWaveTL(g, m, c, x0, x1, top, hh, col, mirror = true) {
     const tt = c.start + (px - x0) / UI.pps; let fm = 1;
     if (c.fadeIn > 0 && tt - c.start < c.fadeIn) fm = (tt - c.start) / c.fadeIn;
     if (c.fadeOut > 0 && cend(c) - tt < c.fadeOut) fm = Math.min(fm, (cend(c) - tt) / c.fadeOut);
-    const v = Math.min(1, Math.pow(pk, 0.7) * vol * fm) * (mirror ? hh / 2 : hh);
+    const v = Math.min(1, Math.pow(pk, 0.7) * vol * fm * envGain(c, tt)) * (mirror ? hh / 2 : hh);
     if (mirror) g.rect(px, mid - v, 1, Math.max(1, v * 2)); else g.rect(px, mid - v, 1, Math.max(1, v));
   }
   g.fill();
@@ -189,6 +189,7 @@ function drawClipTL(g, c, lay) {
     if (c.kind === 'video' && m.peaks && ch > 26 && !c.muted) { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(x0, y + hh - ch * 0.32, w, ch * 0.32); drawWaveTL(g, m, c, x0, x1, y + hh - ch * 0.32, ch * 0.32, 'rgba(120,220,170,.75)', false); }
   } else if (c.kind === 'audio') {
     drawWaveTL(g, m, c, x0, x1, cy + 2, ch - 4, c.muted ? 'rgba(150,150,150,.4)' : 'rgba(110,230,170,.85)');
+    if (ch >= 16 && (c.env || sel)) drawEnvTL(g, c, x0, x1, cy, ch, sel);
   } else if (c.kind === 'text') {
     g.fillStyle = 'rgba(255,255,255,.8)'; g.font = '700 12px "Segoe UI",sans-serif';
     g.fillText('T  ' + (c.text.str || '').replace(/\n/g, ' '), Math.max(x0, 0) + 6, cy + ch / 2 + 4);
@@ -256,7 +257,7 @@ const ICON = {
 };
 function renderHeads() {
   ensureTargets();
-  const inner = $('#headInner'); inner.innerHTML = '';
+  const inner = $('#headInner'); inner.innerHTML = ''; TMET.clear();
   for (const tr of P.tracks) {
     const isT = tr.id === (tr.type === 'video' ? UI.targetV : UI.targetA);
     const tb = (key, on, iconOn, iconOff, title, red) => h('button', { class: (on ? 'on' : '') + (red ? ' red' : ''), title, html: on ? iconOn : iconOff, onclick: () => { edit(() => { tr[key] = !tr[key]; }); renderHeads(); } });
@@ -268,6 +269,7 @@ function renderHeads() {
         tr.type === 'audio' ? h('button', { class: tr.solo ? 'on' : '', title: 'Solo', style: 'font-weight:800;font-size:11px;width:22px', onclick: () => { edit(() => { tr.solo = !tr.solo; }); renderHeads(); } }, 'S') : null,
         tb('locked', tr.locked, ICON.lock, ICON.unlock, 'Lock track', false)));
     row.addEventListener('contextmenu', e => { e.preventDefault(); trackMenu(e.clientX, e.clientY, tr); });
+    const mt = h('i', { class: 'tmeter', style: 'clip-path:inset(0 100% 0 0)' }); row.append(mt); TMET.set(tr.id, { el: mt, v: 0 });
     inner.append(row);
   }
   syncHeads();
@@ -302,6 +304,7 @@ function hit(x, y) {
       return { ...base, zone: best.zone, c, partner };
     }
     for (let i = 0; i < cs.length - 1; i++) { const A = cs[i], B = cs[i + 1]; if (B.start < cend(A) - EPS && t >= B.start && t <= cend(A)) return { ...base, zone: 'xf', A, B, c: B }; }
+    for (const c of cs) if (t >= c.start && t < cend(c)) { const eh = envHit(c, lay, x, y); if (eh && (eh.zone === 'envPt' || UI.sel.has(c.id))) return { ...base, ...eh, c }; }
   }
   let hc = null; for (const c of cs) if (t >= c.start && t < cend(c)) hc = c;
   if (hc) return { ...base, zone: 'clip', c: hc };
@@ -313,7 +316,8 @@ const HINTS = {
   fadeIn: 'Drag to set fade-in (video and audio)', fadeOut: 'Drag to set fade-out (video and audio)',
   xf: 'Transition — click to edit, right-click for types, Delete makes it a hard cut',
   ruler: 'Click or drag to scrub · M marker · I / O set range', marker: 'Click to jump · drag to move · double-click to rename · right-click to delete',
-  lane: 'Drag to box-select · right-click for gap tools', locked: 'Track is locked', sb: 'Drag to scroll',
+  lane: 'Drag to box-select · right-click for gap tools',
+  env: 'Volume line — click to add a point and drag it · Shift skips the 0 dB snap', envPt: 'Drag the volume point · Alt+click deletes it', locked: 'Track is locked', sb: 'Drag to scroll',
 };
 function setHint(s) { const el = $('#hint'); if (el.textContent !== s) el.textContent = s; }
 function hoverUpdate(x, y) {
@@ -326,6 +330,7 @@ function hoverUpdate(x, y) {
     case 'clip': cur = 'grab'; break; case 'xf': cur = 'pointer'; break;
     case 'trimL': case 'trimR': cur = H.partner ? 'col-resize' : 'ew-resize'; if (H.partner) hint += ' · Alt+drag rolls the cut (both clips)'; if (UI.ripple) hint += ' · ripple on'; else if (UI.autoX) hint += ' · drag over the neighbour to cross-fade'; break;
     case 'fadeIn': case 'fadeOut': cur = 'ew-resize'; break;
+    case 'env': cur = 'copy'; break; case 'envPt': cur = 'move'; break;
   }
   if (H.zone === 'ruler' || H.zone === 'marker') cur = 'pointer';
   tl.style.cursor = cur; setHint(hint); dirtyTL = true;
@@ -369,6 +374,13 @@ tl.addEventListener('pointerdown', e => {
     case 'ruler': UI.drag = { ...base, type: 'scrub' }; scrubTo(x); break;
     case 'marker': UI.drag = { ...base, type: 'marker', mk: H.mk, t0: H.mk.t }; break;
     case 'fadeIn': case 'fadeOut': selectOnly(H.c); UI.drag = { ...base, type: H.zone, c: H.c }; break;
+    case 'env': case 'envPt': {
+      const c = H.c; selectOnly(c);
+      if (H.zone === 'envPt' && e.altKey) { edit(() => { c.env.splice(H.i, 1); tidyEnv(c); }, 'Volume point deleted'); break; }
+      let i = H.i;
+      if (H.zone === 'env') { const s = srcAt(c, T(x)); c.env = (c.env || []).concat({ s, db: envDb(c, s) }).sort((a, b) => a.s - b.s); i = c.env.findIndex(p => p.s === s); }
+      UI.drag = { ...base, type: 'env', c, i, top: H.top, hh: H.hh, moved: H.zone === 'env' }; break;
+    }
     case 'trimL': case 'trimR': {
       const c = H.c; selectOnly(c);
       const o = { start: c.start, in: c.in, out: c.out, end: cend(c) };
@@ -436,6 +448,12 @@ tl.addEventListener('pointermove', e => {
       dirtyPV = true; break;
     }
     case 'trimL': case 'trimR': doTrim(d, x); break;
+    case 'env': {
+      const c = d.c, e2 = c.env, p = e2[d.i], lo = d.i > 0 ? e2[d.i - 1].s + 1e-3 : c.in, hi = d.i < e2.length - 1 ? e2[d.i + 1].s - 1e-3 : c.out;
+      p.s = clamp(srcAt(c, T(x)), lo, hi);
+      let db = envDbAtY(y, d.top, d.hh); if (!e.shiftKey && Math.abs(db) < 0.8) db = 0;
+      p.db = Math.round(db * 10) / 10; UI.info = fmtDb(p.db) + ' at ' + fmtTC(tlAt(c, p.s)); dirtyPV = true; break;
+    }
     case 'slip': {
       const c = d.c, L = srcLen(c), len = d.o.out - d.o.in;
       if (!isFinite(L)) { UI.info = 'Stills have nothing to slip'; break; }
@@ -472,6 +490,7 @@ function endDrag(e, cancel) {
       break;
     }
     case 'marker': if (!d.moved) { setTime(d.mk.t); } else commit(d.before); break;
+    case 'env': tidyEnv(d.c); commit(d.before); break;
     case 'trimL': case 'trimR': case 'fadeIn': case 'fadeOut': case 'slip':
       if (UI.autoX) ensureXf([d.c.track]); commit(d.before); break;
   }
@@ -761,16 +780,17 @@ function addGenerator(kind) {
   }, kind === 'text' ? 'Title added — edit it in the inspector' : 'Colour matte inserted at the playhead');
   renderHeads();
 }
-function detachAudio(c) {
+function detachAudio(c, mid) { // mid: put this media on the audio track instead (e.g. a noise-reduced copy)
   const m = media.get(c.media); if (!m || c.kind !== 'video') return;
   if (m.hasAudio === false) return toast('This clip has no audio track');
   edit(() => {
     ensureTargets();
     let tid = UI.targetA; if (!tid) tid = addTrack('audio').id;
     const a = structuredClone(c); a.id = uid('c'); a.kind = 'audio'; a.track = tid; a.xf = null; a.muted = false; a.name = c.name + ' (audio)';
+    if (mid) { a.media = mid; a.name = media.get(mid).name; }
     P.clips.push(a); cutRange(tid, a.start, cend(a), new Set([a.id])); c.muted = true;
     UI.sel = new Set([a.id]);
-  }, 'Audio detached to its own track');
+  }, mid ? 'Cleaned audio placed on its own track — the video clip is muted' : 'Audio detached to its own track');
   renderHeads();
 }
 function addMarker(t = UI.t, beat = false) {

@@ -2,7 +2,7 @@
   "version": "1.1.0",
   "build": 2,
   "date": "2026-10-27",
-  "notes": "9:16 export: choose Reel / Short 9:16 (or square, 4:5) in Export. It picks the shape that matches your footage, and a new project takes the shape of the first video you import.\nOne-click updates in the desktop app: Update downloads in the background, then Restart now.\nSeparate audio: right-click a video in the bin → \"Separate audio\" saves its sound as a WAV, adds it to the bin and uses the video muted from then on. Also \"Use picture only\", \"Save audio as WAV\" and Normalise (−1 dB peak) for audio clips.",
+  "notes": "9:16 export: choose Reel / Short 9:16 (or square, 4:5) in Export. It picks the shape that matches your footage, and a new project takes the shape of the first video you import.\nOne-click updates in the desktop app: Update downloads in the background, then Restart now.\nSeparate audio: right-click a video in the bin → \"Separate audio\" saves its sound as a WAV, adds it to the bin and uses the video muted from then on. Also \"Use picture only\", \"Save audio as WAV\" and Normalise (−1 dB peak) for audio clips.\nSound tools: volume points (click the yellow line on a selected audio clip), auto-ducking of music under speech, EQ (low cut, bass, mids, treble, presets) and pan per clip, noise reduction (makes a cleaned copy), per-track level meters, and audio-only export as WAV or M4A.",
   "feed": "https://gist.githubusercontent.com/RobertRamsay/7329b3fd3b6a84fc30fcbb1b39539410/raw/latest.json",
   "gist": "7329b3fd3b6a84fc30fcbb1b39539410",
   "repo": "RobertRamsay/reel-edit"

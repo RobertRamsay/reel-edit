@@ -212,6 +212,21 @@ function inspClip(c) {
       rowB('Mute', () => c.muted, v => { c.muted = v; }),
       h('div', { class: 'btnrow' }, h('button', { onclick: () => cmdNormalise([c]), disabled: !(m && m.peaks), title: 'Set the volume so the loudest moment of this clip peaks at −1 dB' }, 'Normalise'),
         h('button', { onclick: () => edit(() => { c.volume = 1; }) }, '0 dB'))));
+    if (c.kind === 'audio') B.append(sec(['Volume points', c.env ? h('button', { onclick: () => edit(() => { c.env = null; }, 'Volume points cleared') }, 'Clear') : null],
+      h('div', { class: 'note' }, c.env ? `${c.env.length} point${c.env.length > 1 ? 's' : ''} on the yellow line. Drag them; Alt+click deletes one.` : 'Click the yellow line on the selected clip to add a point, then drag it up or down.'),
+      h('div', { class: 'row' }, h('label', { title: 'Lower this clip wherever the other tracks have speech or sound' }, 'Duck under'), chips([-6, -12, -18].map(db => [fmtDb(db), false, () => cmdDuck([c], db), `Duck ${db} dB under the other tracks`])), h('span'))));
+    const q2 = () => c.eq || (c.eq = { ...EQ0 });
+    B.append(sec(['EQ & pan', h('button', { onclick: () => edit(() => { c.eq = null; c.pan = 0; }) }, 'Reset')],
+      chips(Object.entries(EQ_PRESETS).map(([k, v]) => [k, false, () => edit(() => { c.eq = { ...v }; }), 'EQ preset'])),
+      rowS('Low cut', () => String((c.eq || EQ0).hp), v => { q2().hp = +v; }, [['0', 'Off'], ['60', '60 Hz'], ['100', '100 Hz (voice)'], ['150', '150 Hz'], ['250', '250 Hz (phone)']]),
+      rowR('Bass', () => (c.eq || EQ0).low, v => { q2().low = v; }, { min: -12, max: 12, step: 0.5, fmt: fmtDb, def: 0 }),
+      rowR('Mids', () => (c.eq || EQ0).mid, v => { q2().mid = v; }, { min: -12, max: 12, step: 0.5, fmt: fmtDb, def: 0 }),
+      rowR('Treble', () => (c.eq || EQ0).high, v => { q2().high = v; }, { min: -12, max: 12, step: 0.5, fmt: fmtDb, def: 0 }),
+      rowR('Pan', () => c.pan || 0, v => { c.pan = v; }, { min: -1, max: 1, step: 0.05, fmt: v => Math.abs(v) < 0.025 ? 'Centre' : Math.round(Math.abs(v) * 100) + (v < 0 ? ' L' : ' R'), def: 0 })));
+    if (m && !m.offline && m.hasAudio !== false) B.append(sec('Clean up',
+      h('div', { class: 'row' }, h('label', { title: 'Learns the background hiss/hum from the quietest parts and removes it. Makes a cleaned copy of the sound.' }, 'Reduce noise'),
+        chips(Object.keys(NR_LEVELS).map(k => [k[0].toUpperCase() + k.slice(1), false, () => cmdDenoise(c, k)])), h('span')),
+      h('div', { class: 'note' }, c.kind === 'video' ? 'Puts a cleaned copy of the sound on an audio track and mutes the video clip.' : 'Switches this clip to a cleaned copy of the file (the original stays in the bin).')));
   }
   const maxF = Math.max(frame(), Math.min(10, cdur(c)));
   B.append(sec('Fades',
@@ -373,6 +388,9 @@ function clipMenu(x, y, c, t) {
     '-',
     c.kind === 'video' && m && m.hasAudio !== false ? { label: 'Detach audio', act: () => detachAudio(c) } : null,
     (c.kind === 'video' || c.kind === 'audio') && m && m.peaks ? { label: UI.sel.size > 1 ? 'Normalise selected (−1 dB peak)' : 'Normalise (−1 dB peak)', act: () => cmdNormalise(selClips()) } : null,
+    c.kind === 'audio' ? { label: 'Duck under other tracks (−12 dB)', act: () => cmdDuck(UI.sel.has(c.id) ? selClips() : [c]) } : null,
+    c.kind === 'audio' && c.env ? { label: 'Clear volume points', act: () => edit(() => { c.env = null; }, 'Volume points cleared') } : null,
+    (c.kind === 'video' || c.kind === 'audio') && m && !m.offline && m.hasAudio !== false ? { label: 'Reduce noise…', act: () => cmdDenoise(c, 'medium') } : null,
     (c.kind === 'video' || c.kind === 'audio') ? { label: c.muted ? 'Unmute clip' : 'Mute clip', act: () => edit(() => { c.muted = !c.muted; }) } : null,
     m && m.env ? { label: '♪ Detect beats → markers', act: () => cmdBeats(c) } : null,
     multi ? { label: 'Cut selected to beat (2 beats)', act: () => beatCut(2) } : null,
@@ -412,6 +430,7 @@ function binMenu(x, y, m) {
     m.type === 'video' && m.hasAudio !== false ? { label: 'Separate audio → new audio file', act: () => separateAudio(m), disabled: m.offline } : null,
     m.type === 'video' && m.hasAudio !== false ? { label: m.picOnly ? 'Use with its sound again' : 'Use picture only (mute its sound)', act: () => { m.picOnly = !m.picOnly; renderBin(); scheduleAutosave(); toast(m.picOnly ? m.name + ' now comes in muted' : m.name + ' now comes in with its sound'); } } : null,
     (m.type === 'video' && m.hasAudio !== false) || m.type === 'audio' ? { label: 'Save audio as WAV…', act: () => saveAudio(m), disabled: m.offline } : null,
+    (m.type === 'video' && m.hasAudio !== false) || m.type === 'audio' ? { label: 'Reduce noise → clean copy', act: async () => { const a = await cleanAudio(m); if (a) { UI.binSel = a.id; renderBin(); toast('Cleaned copy added: ' + a.name); } }, disabled: m.offline } : null,
     m.type === 'video' && canProxy(m) ? (m.proxy ? { label: 'Discard proxy (use original)', act: () => discardProxy(m) } : (m.proxyState && /queued|building/.test(m.proxyState.status)) ? { label: 'Cancel proxy', act: () => discardProxy(m) } : { label: 'Make proxy (smooth preview)', act: () => queueProxy(m) }) : null,
     m.info ? { head: m.info } : null,
     '-', { label: 'Relink to another file…', act: () => { pendingRelink = m; $('#fileIn').click(); } },
@@ -513,7 +532,8 @@ async function openExport() {
   const offline = await offlineSupported(), fm = exportFormats();
   if (!offline && !fm.length) return toast('This browser cannot export video — try Chrome or Edge', true);
   const hasIO = P.inPt != null || P.outPt != null;
-  const eng = h('select', {}, offline ? h('option', { value: 'offline' }, 'Frame-accurate · MP4 (H.264) — recommended') : null, fm.length ? h('option', { value: 'realtime' }, 'Real-time capture (legacy)') : null);
+  const eng = h('select', {}, offline ? h('option', { value: 'offline' }, 'Frame-accurate · MP4 (H.264) — recommended') : null, fm.length ? h('option', { value: 'realtime' }, 'Real-time capture (legacy)') : null,
+    h('option', { value: 'wav' }, 'Audio only · WAV (lossless)'), window.AudioEncoder ? h('option', { value: 'm4a' }, 'Audio only · M4A (AAC)') : null);
   const fmt = h('select', {}, fm.map((f, i) => h('option', { value: i }, f.l)));
   const rng = h('select', {}, h('option', { value: 'all' }, `Whole timeline · ${fmtTC(end)}`), hasIO ? h('option', { value: 'io', selected: true }, `In → Out · ${fmtTC((P.outPt ?? end) - (P.inPt ?? 0))}`) : null);
   // output frame: the project's, or another shape (the timeline is re-laid out into it, each clip keeping its Fit/Fill)
@@ -535,21 +555,22 @@ async function openExport() {
     anyProxy ? h('div', { class: 'row' }, h('label', {}, 'Source'), h('label', { style: 'display:flex;gap:6px;align-items:center' }, useProx, 'Render from proxies (smoother on heavy 4K clips, lower resolution)')) : null].filter(Boolean);
   const note = h('p', { class: 'note' }), why = !offline ? webCodecsMissingReason() : null;
   const warn = why ? h('p', { class: 'note', style: 'color:#ffb27a' }, 'Frame-accurate export (the fast, exact MP4 engine) is unavailable: ' + why) : null;
+  const vidRows = [h('div', { class: 'row' }, h('label', {}, 'Frame'), frm), h('div', { class: 'row' }, h('label', {}, 'Resolution'), res), h('div', { class: 'row' }, h('label', {}, 'Quality'), br)];
   const sync = () => {
-    const off = eng.value === 'offline'; rtRows.forEach(r => r.hidden = off);
-    note.textContent = off ? 'Decodes every source frame exactly and encodes faster than real time, straight from your original files — no dropped frames, sound locked to picture. You can switch tabs while it works.'
+    const off = eng.value === 'offline', aud = eng.value === 'wav' || eng.value === 'm4a'; rtRows.forEach(r => r.hidden = off || aud); vidRows.forEach(r => r.hidden = aud);
+    note.textContent = aud ? 'Mixes every track with its volume, volume points, EQ, pan and fades — the same sound as the video export, without the picture.' : off ? 'Decodes every source frame exactly and encodes faster than real time, straight from your original files — no dropped frames, sound locked to picture. You can switch tabs while it works.'
       : 'Plays the timeline in real time and records it, so a 60 s reel takes about 60 s. Keep this tab visible until it finishes.';
   };
   eng.onchange = sync;
   openModal(h('div', {}, h('h2', {}, 'Export video'),
     h('div', { class: 'row' }, h('label', {}, 'Engine'), eng),
     h('div', { class: 'row' }, h('label', {}, 'Range'), rng), ...rtRows,
-    h('div', { class: 'row' }, h('label', {}, 'Frame'), frm),
-    h('div', { class: 'row' }, h('label', {}, 'Resolution'), res), h('div', { class: 'row' }, h('label', {}, 'Quality'), br),
+    ...vidRows,
     h('div', { class: 'row' }, h('label', {}, 'File name'), nm), warn, note,
     h('div', { class: 'foot' }, h('button', { onclick: closeModal }, 'Cancel'), h('button', { class: 'primary', onclick: () => {
       const o = { range: rng.value, scale: +res.value, vbps: +br.value * 1e6, name: nm.value || 'reel' }, fr = frm.value.split('x').map(Number);
-      if (eng.value === 'offline') withFrame(fr, () => runOfflineExport(o)); else withFrame(fr, () => startExport({ ...o, mime: fm[+fmt.value].mime, mute: mute.checked, proxy: useProx.checked }));
+      if (eng.value === 'wav' || eng.value === 'm4a') runAudioExport({ ...o, kind: eng.value });
+      else if (eng.value === 'offline') withFrame(fr, () => runOfflineExport(o)); else withFrame(fr, () => startExport({ ...o, mime: fm[+fmt.value].mime, mute: mute.checked, proxy: useProx.checked }));
     } }, 'Render & download'))));
   sync();
 }
@@ -572,6 +593,22 @@ async function runOfflineExport(o) {
     const r = await exportOffline(o, ui);
     download(r.blob, o.name + '.mp4');
     toast(`Exported ${(r.blob.size / 1e6).toFixed(1)} MB · ${r.frames} frames in ${r.secs.toFixed(0)} s` + (r.audio ? '' : ' · no audio'));
+    window.__lastExport = r;
+  } catch (e) {
+    if (e.message === 'cancelled') toast('Export cancelled'); else { console.error(e); toast('Export failed: ' + e.message, true); }
+  } finally { EXP = null; $('#modal').hidden = true; }
+}
+async function runAudioExport(o) {
+  const end0 = tlEnd(), start = o.range === 'io' ? (P.inPt ?? 0) : 0, end = o.range === 'io' ? (P.outPt ?? end0) : end0;
+  if (end - start < frame()) return toast('Range is empty', true);
+  if (UI.playing) pause();
+  const bar = h('i'), lab = h('div', { class: 'note' }, 'Preparing…');
+  $('#mbox').innerHTML = ''; $('#mbox').append(h('h2', {}, 'Rendering audio · ' + o.name), h('div', { class: 'pbar' }, bar), lab, h('div', { class: 'foot' }, h('button', { onclick: cancelExport }, 'Cancel (Esc)')));
+  EXP = { offline: true, cancelled: false };
+  try {
+    const r = await exportAudioOnly(o, { prog: (p, s) => { bar.style.width = (p * 100).toFixed(1) + '%'; lab.textContent = s; } });
+    download(r.blob, o.name + '.' + r.ext);
+    toast(`Exported ${(r.blob.size / 1e6).toFixed(1)} MB ${r.ext.toUpperCase()} in ${r.secs.toFixed(1)} s`);
     window.__lastExport = r;
   } catch (e) {
     if (e.message === 'cancelled') toast('Export cancelled'); else { console.error(e); toast('Export failed: ' + e.message, true); }
@@ -796,7 +833,7 @@ function frameLoop(now) {
   if (dirtyPV) { dirtyPV = false; renderPreview(); }
   if (dirtyTL) { dirtyTL = false; phDirty = false; drawTimeline(); }
   else if (phDirty) { phDirty = false; blitTimeline(); }
-  drawMeter(); updTC();
+  drawMeter(); updTrackMeters(UI.t, UI.playing); updTC();
   // preview can't keep up at full size → drop to ½ (export is unaffected)
   if (UI.playing && !EXP && UI.pvScale === 1 && pvDrawMs > 14) { if (++slowFrames > 45) { slowFrames = 0; UI.pvScale = 0.5; $('#pvQ').value = '0.5'; resizePreview(); toast('Preview switched to ½ size to keep up with playback (export is still full size)'); } }
   else slowFrames = 0;

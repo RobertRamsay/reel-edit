@@ -417,7 +417,10 @@ function ensureAudio() {
 const pool = []; // {el, kind, mediaId, clipId, src, gain}
 function attachAudio(p) {
   if (!actx || p.src || !(p.role === 'av' || p.role === 'snd')) return;
-  try { p.src = actx.createMediaElementSource(p.el); p.gain = actx.createGain(); p.gain.gain.value = 0; p.src.connect(p.gain); p.gain.connect(master); } catch (e) { console.warn(e); }
+  try {
+    p.src = actx.createMediaElementSource(p.el); p.chain = makeChain(actx); p.gain = actx.createGain(); p.gain.gain.value = 0;
+    p.src.connect(p.chain.input); p.chain.output.connect(p.gain); p.gain.connect(master);
+  } catch (e) { console.warn(e); }
 }
 /* Player roles per clip:
    av  – original video element: picture + sound (no proxy)
@@ -483,7 +486,7 @@ function clipGain(c, t) {
   const [pr, nx] = neighbors(c);
   if (pr && cend(pr) > c.start + EPS && t < cend(pr)) g *= xfIn(clamp((t - c.start) / (cend(pr) - c.start), 0, 1), (c.xf || xfDefault()).type);
   if (nx && nx.start < cend(c) - EPS && t >= nx.start) g *= xfOut(clamp((t - nx.start) / (cend(c) - nx.start), 0, 1), (nx.xf || xfDefault()).type);
-  return Math.max(0, g);
+  return Math.max(0, g * envGain(c, t));
 }
 let lastScrub = 0, hqTimer = 0, resyncQueued = false;
 function resyncSoon() { if (resyncQueued) return; resyncQueued = true; setTimeout(() => { resyncQueued = false; if (!UI.playing) syncMedia(UI.t, false); }, 0); }
@@ -517,6 +520,7 @@ function syncMedia(t, playing) {
       if (!el.seeking && Math.abs(el.currentTime - target) > 0.5 / fps()) el.currentTime = target;
     }
     if (p.gain && actx) {
+      if (p.chain) p.chain.set(c);
       const g = (playing && active) ? clipGain(c, t) : 0;
       p.gain.gain.setTargetAtTime(g, actx.currentTime, 0.012);
     }

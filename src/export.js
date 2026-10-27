@@ -113,7 +113,8 @@ async function mixAudio(start, end, sr) {
     const buf = cache.get(m.id); if (!buf) continue;
     const s = Math.max(c.start, start), e = Math.min(cend(c), end);
     const src = ctx.createBufferSource(), gn = ctx.createGain();
-    src.buffer = buf; src.playbackRate.value = c.speed; src.connect(gn); gn.connect(ctx.destination);
+    src.buffer = buf; src.playbackRate.value = c.speed; gn.connect(ctx.destination);
+    if (eqOn(c)) { const ch = makeChain(ctx); ch.set(c); src.connect(ch.input); ch.output.connect(gn); } else src.connect(gn);
     gn.gain.setValueAtTime(clipGain(c, s), s - start);
     for (let t = s + 0.01; t < e; t += 0.01) gn.gain.linearRampToValueAtTime(clipGain(c, t), t - start);
     gn.gain.linearRampToValueAtTime(clipGain(c, e - 1e-4), e - start);
@@ -196,15 +197,17 @@ function trakBox(id, isV, ts, mediaDur, durMs, w, h, entry, durs, sizes, offsets
   return mbox('trak', tkhd, edts, mbox('mdia', mdhd, hdlr, mbox('minf', xmhd, dinf, stblBox(entry, durs, sizes, offsets, keys, ctts))));
 }
 function muxMP4(v, a) {
-  // v: {w,h,fps,avcC,samples:[{data,key,ts}]}  a: {sr,codec,desc,bitrate,chunks:[{data,dur}],delay,preSkip} | null
+  // v: {w,h,fps,avcC,samples:[{data,key,ts}]} | null (audio-only .m4a)  a: {sr,codec,desc,bitrate,chunks:[{data,dur}],delay,preSkip} | null
+  if (!v) v = { w: 0, h: 0, fps: 1, samples: [], none: true };
   const vts = v.fps * 1000, fd = 1000;
   const pts = v.samples.map(s => Math.round(s.ts * vts / 1e6));
   const sorted = [...pts].sort((x, y) => x - y), mono = pts.every((p, i) => p === sorted[i]);
   const dts = mono ? pts : sorted, ctts = mono ? null : pts.map((p, i) => p - dts[i]);
   const vdurs = dts.map((d, i) => i + 1 < dts.length ? dts[i + 1] - d : fd);
-  const vDurTicks = dts.length ? dts[dts.length - 1] + fd - dts[0] : 0, durMs = Math.round(vDurTicks / vts * 1000);
+  const vDurTicks = dts.length ? dts[dts.length - 1] + fd - dts[0] : 0;
+  let durMs = Math.round(vDurTicks / vts * 1000);
   const vsizes = v.samples.map(s => s.data.length), vkeys = []; v.samples.forEach((s, i) => { if (s.key) vkeys.push(i + 1); });
-  const avc1 = mbox('avc1', mu8(0, 0, 0, 0, 0, 0), mu16(1), mu16(0), mu16(0), mu32(0), mu32(0), mu32(0), mu16(v.w), mu16(v.h), mu32(0x480000), mu32(0x480000), mu32(0), mu16(1), new Uint8Array(32), mu16(0x18), mu16(0xffff), mbox('avcC', v.avcC));
+  const avc1 = v.none ? null : mbox('avc1', mu8(0, 0, 0, 0, 0, 0), mu16(1), mu16(0), mu16(0), mu32(0), mu32(0), mu32(0), mu16(v.w), mu16(v.h), mu32(0x480000), mu32(0x480000), mu32(0), mu16(1), new Uint8Array(32), mu16(0x18), mu16(0xffff), mbox('avcC', v.avcC));
   let aentry = null, adurs = null, asizes = null, aDur = 0;
   if (a) {
     const isOpus = a.codec === 'opus';
@@ -213,12 +216,15 @@ function muxMP4(v, a) {
     const dflt = isOpus ? 960 : 1024;
     adurs = a.chunks.map(c => c.dur ? Math.round(c.dur * a.sr / 1e6) || dflt : dflt); asizes = a.chunks.map(c => c.data.length);
     aDur = adurs.reduce((s, x) => s + x, 0);
+    if (v.none) durMs = Math.round(aDur / a.sr * 1000);
   }
-  const ftyp = mbox('ftyp', m4('isom'), mu32(0x200), m4('isom'), m4('iso2'), m4('avc1'), m4('mp41'));
+  const ftyp = v.none ? mbox('ftyp', m4('M4A '), mu32(0x200), m4('isom'), m4('iso2'), m4('M4A '), m4('mp41'))
+    : mbox('ftyp', m4('isom'), mu32(0x200), m4('isom'), m4('iso2'), m4('avc1'), m4('mp41'));
+  const aid = v.none ? 1 : 2;
   const build = (vo, ao) => mbox('moov',
-    mfull('mvhd', 0, 0, mu32(0), mu32(0), mu32(1000), mu32(durMs), mu32(0x10000), mu16(0x100), new Uint8Array(10), MATRIX, new Uint8Array(24), mu32(a ? 3 : 2)),
-    trakBox(1, true, vts, vDurTicks, durMs, v.w, v.h, avc1, vdurs, vsizes, vo, vkeys, ctts, 0),
-    a ? trakBox(2, false, a.sr, aDur, Math.min(durMs, Math.round(aDur / a.sr * 1000)), 0, 0, aentry, adurs, asizes, ao, null, null, a.codec === 'opus' ? 0 : (a.delay || 0)) : new Uint8Array(0));
+    mfull('mvhd', 0, 0, mu32(0), mu32(0), mu32(1000), mu32(durMs), mu32(0x10000), mu16(0x100), new Uint8Array(10), MATRIX, new Uint8Array(24), mu32(aid + 1)),
+    v.none ? new Uint8Array(0) : trakBox(1, true, vts, vDurTicks, durMs, v.w, v.h, avc1, vdurs, vsizes, vo, vkeys, ctts, 0),
+    a ? trakBox(aid, false, a.sr, aDur, Math.min(durMs, Math.round(aDur / a.sr * 1000)), 0, 0, aentry, adurs, asizes, ao, null, null, a.codec === 'opus' ? 0 : (a.delay || 0)) : new Uint8Array(0));
   const zeros = n => new Array(n).fill(0);
   const moovLen = build(zeros(vsizes.length), a ? zeros(asizes.length) : []).length;
   let off = ftyp.length + moovLen + 16; const vo = [], ao = [];
@@ -226,7 +232,7 @@ function muxMP4(v, a) {
   if (a) for (const s of asizes) { ao.push(off); off += s; }
   const moov = build(vo, ao), mdatLen = off - ftyp.length - moovLen;
   const mdatHdr = catU8([mu32(1), m4('mdat'), mu64(mdatLen)]);
-  return new Blob([ftyp, moov, mdatHdr, ...v.samples.map(s => s.data), ...(a ? a.chunks.map(c => c.data) : [])], { type: 'video/mp4' });
+  return new Blob([ftyp, moov, mdatHdr, ...v.samples.map(s => s.data), ...(a ? a.chunks.map(c => c.data) : [])], { type: v.none ? 'audio/mp4' : 'video/mp4' });
 }
 
 /* ---------- pixels → encoder ---------- */
@@ -340,13 +346,29 @@ async function exportOffline(o, ui) {
     ui.prog(0.91, 'Mixing audio…');
     const mix = await mixAudio(start, end, SR);
     if (EXP.cancelled) throw new Error('cancelled');
-    if (mix) {
-      audio = await encodeAudio(mix, acfg, p => ui.prog(0.92 + p * 0.05, 'Encoding audio…'));
-      if (audio.codec === 'opus') audio.preSkip = audio.desc && audio.desc.length >= 12 ? audio.desc[10] | (audio.desc[11] << 8) : 312;
-      else { ui.prog(0.97, 'Aligning audio…'); const d = await measureAudioDelay(audio, mix); audio.delay = d == null ? 0 : d; }
-    }
+    if (mix) audio = await encodeMix(mix, acfg, (p, s) => ui.prog(0.92 + p * 0.06, s));
   }
   ui.prog(0.99, 'Writing MP4…');
   const blob = muxMP4({ w: OW, h: OH, fps: fpsO, avcC, samples: vs }, audio);
   return { blob, frames: vs.length, fastFrames, secs: (performance.now() - t0) / 1000, audio: audio && audio.codec, delay: audio && (audio.delay || audio.preSkip) };
+}
+
+/* ---------- audio-only export: the timeline's mix as WAV or M4A (AAC) ---------- */
+async function encodeMix(mix, acfg, prog) {
+  const audio = await encodeAudio(mix, acfg, p => prog(p * 0.85, 'Encoding audio…'));
+  if (audio.codec === 'opus') audio.preSkip = audio.desc && audio.desc.length >= 12 ? audio.desc[10] | (audio.desc[11] << 8) : 312;
+  else { prog(0.9, 'Aligning audio…'); const d = await measureAudioDelay(audio, mix); audio.delay = d == null ? 0 : d; }
+  return audio;
+}
+async function exportAudioOnly(o, ui) {
+  const end0 = tlEnd(), start = o.range === 'io' ? (P.inPt ?? 0) : 0, end = o.range === 'io' ? (P.outPt ?? end0) : end0, t0 = performance.now();
+  ui.prog(0.05, 'Mixing audio…');
+  const mix = await mixAudio(start, end, 48000);
+  if (!mix) throw new Error('the timeline has no sound in this range');
+  if (EXP.cancelled) throw new Error('cancelled');
+  if (o.kind === 'wav') return { blob: wavBlob([mix.getChannelData(0), mix.getChannelData(1)], mix.sampleRate), ext: 'wav', secs: (performance.now() - t0) / 1000 };
+  const acfg = await pickAudio(48000); if (!acfg) throw new Error('no AAC/Opus encoder available — export WAV instead');
+  const audio = await encodeMix(mix, acfg, (p, s) => ui.prog(0.1 + p * 0.85, s));
+  ui.prog(0.98, 'Writing M4A…');
+  return { blob: muxMP4(null, audio), ext: 'm4a', secs: (performance.now() - t0) / 1000 };
 }
