@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
@@ -13,6 +15,7 @@ static class Program
     static void Main(string[] args)
     {
         Log.Write("start v" + Application.ProductVersion + " " + string.Join(" ", args));
+        Updater.AfterRestart(args);
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => Fatal(e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Fatal(e.ExceptionObject as Exception);
@@ -66,7 +69,7 @@ sealed class MainForm : Form
     public MainForm(string[] args)
     {
         devTools = args.Contains("--devtools");
-        pendingOpen = args.Where(File.Exists).Select(Path.GetFullPath).ToList();
+        pendingOpen = args.Where(a => !a.StartsWith("--") && File.Exists(a)).Select(Path.GetFullPath).ToList();
         Text = "Reel Edit " + Application.ProductVersion;
         BackColor = Color.FromArgb(12, 13, 16);
         try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath); } catch { }
@@ -144,6 +147,7 @@ sealed class MainForm : Form
         cw.AddWebResourceRequestedFilter($"https://{FileHost}/*", CoreWebView2WebResourceContext.All);
         cw.WebResourceRequested += ServeOpenedFile;
         cw.DownloadStarting += OnDownloadStarting;
+        cw.WebMessageReceived += OnWebMessage;
         cw.NewWindowRequested += (_, e) =>
         {
             e.Handled = true;
@@ -209,6 +213,28 @@ sealed class MainForm : Form
             $"Content-Type: application/octet-stream\r\nContent-Length: {fs.Length}\r\nAccess-Control-Allow-Origin: https://{Host}");
     }
 
+    /* ---------- messages from the page: self-update ---------- */
+    void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (!e.Source.StartsWith($"https://{Host}/", StringComparison.OrdinalIgnoreCase)) return;
+        JsonElement m;
+        try { m = JsonDocument.Parse(e.WebMessageAsJson).RootElement; } catch { return; }
+        var type = m.TryGetProperty("type", out var t) ? t.GetString() : null;
+        if (type == "update") _ = InstallUpdate(m.GetProperty("url").GetString(), m.GetProperty("sha256").GetString());
+        else if (type == "restart" && Updater.Installed) { Updater.Restart(); Close(); }
+    }
+
+    async Task InstallUpdate(string url, string sha256)
+    {
+        void Post(object o) => BeginInvoke(() => web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(o)));
+        try
+        {
+            await Updater.Install(url, sha256, p => Post(new { type = "update", state = "progress", p }));
+            Post(new { type = "update", state = "ready" });
+        }
+        catch (Exception ex) { Log.Write("update failed: " + ex); Post(new { type = "update", state = "failed", msg = ex.Message }); }
+    }
+
     /* ---------- downloads → native Save dialog ---------- */
     void OnDownloadStarting(object sender, CoreWebView2DownloadStartingEventArgs e)
     {
@@ -247,4 +273,84 @@ sealed class MainForm : Form
 
     [DllImport("dwmapi.dll")]
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+}
+
+/// <summary>
+/// Swaps in a new ReelEdit.exe from a release zip. Windows lets a running exe be renamed but not
+/// overwritten, so the running one becomes ReelEdit.old.exe and the new one takes its name; the
+/// current window keeps working and the next launch is the new version.
+/// </summary>
+static class Updater
+{
+    // only release downloads from this account are installed (REELEDIT_UPDATE_HOST adds a test server)
+    static readonly string[] Trusted = new[] { "https://github.com/RobertRamsay/", Environment.GetEnvironmentVariable("REELEDIT_UPDATE_HOST") }
+        .Where(x => !string.IsNullOrEmpty(x)).ToArray();
+    static readonly string Exe = Environment.ProcessPath;
+    static string Old => Path.Combine(Path.GetDirectoryName(Exe), Path.GetFileNameWithoutExtension(Exe) + ".old.exe");
+    public static bool Installed { get; private set; }
+    static bool busy;
+
+    public static async Task Install(string url, string sha256, Action<double> progress)
+    {
+        if (Installed) return;
+        if (busy) throw new Exception("an update is already downloading");
+        if (!Trusted.Any(p => url.StartsWith(p, StringComparison.OrdinalIgnoreCase))) throw new Exception("untrusted download address");
+        if (string.IsNullOrEmpty(sha256)) throw new Exception("the release has no checksum");
+        busy = true;
+        var dir = Path.Combine(Path.GetDirectoryName(Exe), "ReelEdit.update");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var zip = Path.Combine(dir, "ReelEdit.zip");
+            using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(20) })
+            using (var res = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+            {
+                res.EnsureSuccessStatusCode();
+                long total = res.Content.Headers.ContentLength ?? 0, got = 0, last = 0;
+                using var src = await res.Content.ReadAsStreamAsync();
+                using var dst = File.Create(zip);
+                var buf = new byte[1 << 20];
+                for (int n; (n = await src.ReadAsync(buf)) > 0;)
+                {
+                    await dst.WriteAsync(buf.AsMemory(0, n)); got += n;
+                    if (total > 0 && got - last > total / 100) { last = got; progress((double)got / total); }
+                }
+            }
+            string hash;
+            using (var f = File.OpenRead(zip)) hash = Convert.ToHexString(SHA256.HashData(f));
+            if (!hash.Equals(sha256, StringComparison.OrdinalIgnoreCase)) throw new Exception("the download is damaged (checksum mismatch)");
+
+            var fresh = Path.Combine(dir, "ReelEdit.exe");
+            using (var za = ZipFile.OpenRead(zip))
+            {   // Compress-Archive on Windows PowerShell writes backslashes in entry names
+                var entry = za.Entries.FirstOrDefault(x => x.FullName.Replace('\\', '/').Equals("ReelEdit/ReelEdit.exe", StringComparison.OrdinalIgnoreCase))
+                    ?? throw new Exception("the zip has no ReelEdit.exe");
+                entry.ExtractToFile(fresh, true);
+            }
+            if (FileVersionInfo.GetVersionInfo(fresh).ProductName != "Reel Edit") throw new Exception("the zip's exe isn't Reel Edit");
+
+            if (File.Exists(Old)) File.Delete(Old); // left by an earlier update whose cleanup failed
+            File.Move(Exe, Old);
+            try { File.Move(fresh, Exe); }
+            catch { File.Move(Old, Exe); throw; }
+            Installed = true;
+            Log.Write("update installed from " + url);
+        }
+        catch (UnauthorizedAccessException) { throw new Exception("no permission to replace " + Exe + " (move Reel Edit to a folder you own, e.g. Documents)"); }
+        finally { busy = false; try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // the new exe waits for this window to close before it opens the shared browser profile
+    public static void Restart() => Process.Start(new ProcessStartInfo(Exe, "--after-update " + Environment.ProcessId) { UseShellExecute = false });
+
+    public static void AfterRestart(string[] args)
+    {
+        var i = Array.IndexOf(args, "--after-update");
+        var pid = i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out var p) ? p : 0;
+        var restarted = pid > 0;
+        if (restarted) try { Process.GetProcessById(pid).WaitForExit(15000); } catch { }
+        // a plain launch tries once: the old exe may still be running in another window
+        for (var k = 0; k < (restarted ? 10 : 1) && File.Exists(Old); k++)
+            try { File.Delete(Old); } catch { Thread.Sleep(300); }
+    }
 }

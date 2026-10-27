@@ -352,7 +352,13 @@ async function importFiles(files, opt = {}) {
     if (m.type === 'video') prepVideo(m); analyzeAudio(m);
     if (relinked) toast('Relinked ' + m.name);
   }
-  if (added.length) { changed(); if (!opt.quiet) toast(`Imported ${added.length} item${added.length > 1 ? 's' : ''}`); }
+  // empty timeline: shape the project to the footage (vertical phone clips → 9:16)
+  const v = !P.clips.length && added.find(m => m.type === 'video'), fr = v && footageFrame([{ kind: 'video', media: v.id, start: 0, in: 0, out: 1, speed: 1 }]);
+  if (fr && fr !== `${P.settings.w}x${P.settings.h}`) {
+    const [w, hh] = fr.split('x').map(Number);
+    edit(() => { P.settings.w = w; P.settings.h = hh; }); resizePreview();
+    toast(`Project set to ${w}×${hh} to match ${v.name} — change it under Project`);
+  } else if (added.length) { changed(); if (!opt.quiet) toast(`Imported ${added.length} item${added.length > 1 ? 's' : ''}`); }
   return added;
 }
 

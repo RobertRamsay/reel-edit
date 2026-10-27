@@ -149,11 +149,22 @@ function renderInsp() {
   }
   B.scrollTop = st;
 }
+const FRAMES = [['1920x1080', 'Landscape 16:9 · 1920×1080'], ['1080x1920', 'Reel / Short 9:16 · 1080×1920'], ['1080x1080', 'Square 1:1 · 1080×1080'], ['1080x1350', 'Portrait 4:5 · 1080×1350'], ['3840x2160', '4K UHD · 3840×2160'], ['2560x1440', '1440p · 2560×1440'], ['1280x720', '720p · 1280×720']];
+// the frame shape (16:9, 9:16, 1:1, 4:5) closest to most of the footage, weighted by time on screen
+function footageFrame(clips = P.clips) {
+  const shapes = FRAMES.slice(0, 4).map(([k]) => { const [w, hh] = k.split('x').map(Number); return { k, r: Math.log(w / hh), d: 0 }; });
+  for (const c of clips) {
+    const m = c.kind === 'video' && media.get(c.media); if (!m || !m.w || !m.h) continue;
+    const r = Math.log(m.w / m.h); shapes.reduce((a, b) => Math.abs(b.r - r) < Math.abs(a.r - r) ? b : a).d += cdur(c);
+  }
+  const best = shapes.reduce((a, b) => b.d > a.d ? b : a);
+  return best.d > 0 ? best.k : null;
+}
 function inspProject() {
   $('#inspTitle').textContent = 'Project';
   const B = $('#inspBody'), S = P.settings, e = tlEnd();
   const preset = `${S.w}x${S.h}`;
-  const presets = [['1920x1080', 'Landscape 16:9 · 1920×1080'], ['1080x1920', 'Reel / Short 9:16 · 1080×1920'], ['1080x1080', 'Square 1:1 · 1080×1080'], ['1080x1350', 'Portrait 4:5 · 1080×1350'], ['3840x2160', '4K UHD · 3840×2160'], ['2560x1440', '1440p · 2560×1440'], ['1280x720', '720p · 1280×720']];
+  const presets = FRAMES.slice();
   if (!presets.some(p => p[0] === preset)) presets.push([preset, `Custom · ${S.w}×${S.h}`]);
   B.append(sec('Format',
     rowS('Frame', () => preset, v => { const [w, hh] = v.split('x').map(Number); S.w = w; S.h = hh; resizePreview(); }, presets),
@@ -498,7 +509,16 @@ async function openExport() {
   const eng = h('select', {}, offline ? h('option', { value: 'offline' }, 'Frame-accurate · MP4 (H.264) — recommended') : null, fm.length ? h('option', { value: 'realtime' }, 'Real-time capture (legacy)') : null);
   const fmt = h('select', {}, fm.map((f, i) => h('option', { value: i }, f.l)));
   const rng = h('select', {}, h('option', { value: 'all' }, `Whole timeline · ${fmtTC(end)}`), hasIO ? h('option', { value: 'io', selected: true }, `In → Out · ${fmtTC((P.outPt ?? end) - (P.inPt ?? 0))}`) : null);
-  const res = h('select', {}, h('option', { value: 1 }, `Full · ${P.settings.w}×${P.settings.h}`), h('option', { value: 0.5 }, `Half · ${P.settings.w / 2}×${P.settings.h / 2}`));
+  // output frame: the project's, or another shape (the timeline is re-laid out into it, each clip keeping its Fit/Fill)
+  const proj = `${P.settings.w}x${P.settings.h}`, det = footageFrame();
+  const frm = h('select', {}, h('option', { value: proj }, `Project · ${P.settings.w}×${P.settings.h}`),
+    FRAMES.slice(0, 4).filter(([k]) => k !== proj).map(([k, l]) => h('option', { value: k, selected: k === det }, l + (k === det ? ' — matches your footage' : ''))));
+  const res = h('select', {});
+  const syncRes = () => {
+    const [w, hh] = frm.value.split('x').map(Number), v = res.value || '1';
+    res.innerHTML = ''; res.append(h('option', { value: 1 }, `Full · ${w}×${hh}`), h('option', { value: 0.5 }, `Half · ${even(w / 2)}×${even(hh / 2)}`)); res.value = v;
+  };
+  frm.onchange = syncRes; syncRes();
   const br = h('select', {}, [[4, 'Draft · 4 Mbps'], [12, 'Good · 12 Mbps'], [24, 'High · 24 Mbps'], [50, 'Master · 50 Mbps']].map(([v, l]) => h('option', { value: v, selected: v === 24 }, l)));
   const nm = h('input', { value: P.name.replace(/[\/:*?"<>|]+/g, '_'), spellcheck: false });
   const mute = h('input', { type: 'checkbox', checked: true });
@@ -517,13 +537,21 @@ async function openExport() {
   openModal(h('div', {}, h('h2', {}, 'Export video'),
     h('div', { class: 'row' }, h('label', {}, 'Engine'), eng),
     h('div', { class: 'row' }, h('label', {}, 'Range'), rng), ...rtRows,
+    h('div', { class: 'row' }, h('label', {}, 'Frame'), frm),
     h('div', { class: 'row' }, h('label', {}, 'Resolution'), res), h('div', { class: 'row' }, h('label', {}, 'Quality'), br),
     h('div', { class: 'row' }, h('label', {}, 'File name'), nm), warn, note,
     h('div', { class: 'foot' }, h('button', { onclick: closeModal }, 'Cancel'), h('button', { class: 'primary', onclick: () => {
-      const o = { range: rng.value, scale: +res.value, vbps: +br.value * 1e6, name: nm.value || 'reel' };
-      if (eng.value === 'offline') runOfflineExport(o); else startExport({ ...o, mime: fm[+fmt.value].mime, mute: mute.checked, proxy: useProx.checked });
+      const o = { range: rng.value, scale: +res.value, vbps: +br.value * 1e6, name: nm.value || 'reel' }, fr = frm.value.split('x').map(Number);
+      if (eng.value === 'offline') withFrame(fr, () => runOfflineExport(o)); else withFrame(fr, () => startExport({ ...o, mime: fm[+fmt.value].mime, mute: mute.checked, proxy: useProx.checked }));
     } }, 'Render & download'))));
   sync();
+}
+// render in another frame size without touching the saved project (autosave held off until it's put back)
+async function withFrame([w, hh], fn) {
+  const S = P.settings, w0 = S.w, h0 = S.h;
+  if (w === w0 && hh === h0) return fn();
+  frameSwap = true; clearTimeout(asTimer); S.w = w; S.h = hh; resizePreview();
+  try { return await fn(); } finally { S.w = w0; S.h = h0; frameSwap = false; resizePreview(); scheduleAutosave(); }
 }
 async function runOfflineExport(o) {
   const end0 = tlEnd(), start = o.range === 'io' ? (P.inPt ?? 0) : 0, end = o.range === 'io' ? (P.outPt ?? end0) : end0;
@@ -632,7 +660,8 @@ function loadProject(o) {
   if (off) toast(`${off} media file${off > 1 ? 's' : ''} offline — drop the files in to relink`, true); else toast('Project loaded');
 }
 let asTimer = 0;
-function scheduleAutosave() { clearTimeout(asTimer); asTimer = setTimeout(() => { try { localStorage.setItem('reeledit.autosave', JSON.stringify(projectJSON())); } catch (e) { } }, 900); }
+let frameSwap = false; // withFrame has the project's frame swapped for an export — don't autosave that
+function scheduleAutosave() { clearTimeout(asTimer); if (frameSwap) return; asTimer = setTimeout(() => { try { localStorage.setItem('reeledit.autosave', JSON.stringify(projectJSON())); } catch (e) { } }, 900); }
 function savePrefs() { try { localStorage.setItem('reeledit.prefs', JSON.stringify({ snap: UI.snap, autoX: UI.autoX, ripple: UI.ripple, tlh: getComputedStyle($('#app')).getPropertyValue('--tlh') })); } catch (e) { } }
 function loadPrefs() {
   try {
@@ -813,12 +842,13 @@ function boot() {
 }
 /* ---------- version & updates ----------
    APP_VER comes from version.json at build time. The feed is a small public latest.json
-   ({version, build, date, url, notes}); a higher build number than ours means a newer release. */
+   ({version, build, date, url, zip, sha256, notes}); a higher build number than ours means a newer release. */
 const fmtDay = d => { try { return new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch (e) { return d; } };
 const verLine = () => `Reel Edit v${APP_VER.version} · build ${APP_VER.build} · ${fmtDay(APP_VER.date)}`;
 let newRelease = null;
 async function checkUpdates(manual) {
   if (!APP_VER.feed) { if (manual) toast('No update feed is set for this build', true); return; }
+  if (updState) { if (manual) openUpdate(); return; }
   try {
     const r = await fetch(APP_VER.feed + '?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -829,14 +859,47 @@ async function checkUpdates(manual) {
     if (manual) openUpdate();
   } catch (e) { if (manual) toast("Couldn't check for updates: " + e.message, true); }
 }
+// desktop: the exe downloads the release zip, checks it and swaps itself in (see Updater in Program.cs)
+let updState = null; // null | 'downloading' | 'ready'
+const selfUpdate = () => DESKTOP && newRelease && newRelease.zip && newRelease.sha256;
 function openUpdate() {
   const j = newRelease; if (!j) return;
+  if (updState === 'ready') return openRestart();
+  const auto = selfUpdate();
   openModal(h('div', {}, h('h2', {}, `Reel Edit v${j.version} is available`),
     h('p', {}, `Build ${j.build} · released ${fmtDay(j.date)}. You have v${APP_VER.version} (build ${APP_VER.build}, ${fmtDay(APP_VER.date)}).`),
     j.notes ? h('p', { style: 'white-space:pre-line' }, j.notes) : null,
-    h('p', { style: 'color:var(--tx2)' }, DESKTOP ? 'Download the new zip, close Reel Edit and replace ReelEdit.exe with the new one. Your settings and autosave stay.' : 'Download the new zip and open the new ReelEdit.html.'),
+    h('p', { style: 'color:var(--tx2)' }, auto ? 'Downloads in the background while you keep working, then asks to restart. Your settings and autosave stay.'
+      : DESKTOP ? 'Download the new zip, close Reel Edit and replace ReelEdit.exe with the new one. Your settings and autosave stay.' : 'Download the new zip and open the new ReelEdit.html.'),
     h('div', { class: 'foot' }, h('button', { onclick: closeModal }, 'Later'),
-      j.url ? h('button', { class: 'primary', onclick: () => { window.open(j.url, '_blank', 'noopener'); closeModal(); } }, 'Download') : null)));
+      auto ? h('button', { class: 'primary', disabled: updState === 'downloading', onclick: () => { startUpdate(); closeModal(); } }, updState === 'downloading' ? 'Downloading…' : 'Update')
+        : j.url ? h('button', { class: 'primary', onclick: () => { window.open(j.url, '_blank', 'noopener'); closeModal(); } }, 'Download') : null)));
+}
+function startUpdate() {
+  if (updState) return;
+  updState = 'downloading'; $('#upd').textContent = 'Downloading update…';
+  window.chrome.webview.postMessage({ type: 'update', url: newRelease.zip, sha256: newRelease.sha256 });
+}
+function onUpdateMsg(d) {
+  const b = $('#upd');
+  if (d.state === 'progress') b.textContent = `Downloading update… ${Math.round(d.p * 100)}%`;
+  else if (d.state === 'ready') { updState = 'ready'; b.textContent = `Restart to update to v${newRelease.version}`; if (!EXP) openRestart(); else toast('Update ready — restart when your export is done'); }
+  else if (d.state === 'failed') {
+    updState = null; b.textContent = `Update available: v${newRelease.version}`;
+    toast("Couldn't update: " + d.msg + (newRelease.url ? ' — opening the download page' : ''), true);
+    if (newRelease.url) window.open(newRelease.url, '_blank', 'noopener');
+  }
+}
+function openRestart() {
+  const media = P.clips.some(c => c.media);
+  openModal(h('div', {}, h('h2', {}, `Reel Edit v${newRelease.version} is installed`),
+    h('p', {}, 'Restart now to use it, or carry on — it opens next time you start Reel Edit.'),
+    media ? h('p', { style: 'color:var(--tx2)' }, 'Your timeline is autosaved and offered back after the restart; you\'ll re-drop the media files to relink them.') : null,
+    h('div', { class: 'foot' }, h('button', { onclick: closeModal }, 'Later'),
+      h('button', { class: 'primary', disabled: !!EXP, onclick: () => {
+        clearTimeout(asTimer); try { localStorage.setItem('reeledit.autosave', JSON.stringify(projectJSON())); } catch (e) { }
+        window.chrome.webview.postMessage({ type: 'restart' });
+      } }, 'Restart now'))));
 }
 $('#ver').textContent = 'v' + APP_VER.version; $('#ver').title = verLine();
 $('#upd').onclick = openUpdate;
@@ -847,7 +910,8 @@ const DESKTOP = !!(window.chrome && window.chrome.webview);
 if (DESKTOP) {
   // files dropped on the exe / "Open with" arrive as URLs the shell streams from disk
   window.chrome.webview.addEventListener('message', async e => {
-    const d = e.data; if (!d || d.type !== 'open') return;
+    const d = e.data; if (d && d.type === 'update') return onUpdateMsg(d);
+    if (!d || d.type !== 'open') return;
     const files = [];
     for (const f of d.files) {
       try { files.push(new File([await (await fetch(f.url)).blob()], f.name)); } catch (err) { toast('Could not open ' + f.name, true); }

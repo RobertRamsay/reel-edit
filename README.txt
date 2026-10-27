@@ -104,14 +104,21 @@ Version and updates
   The version shows next to the logo (hover it for the build number and date), in the ? panel and in the
   exe's window title. A few seconds after start-up, and every 6 hours after that, the app reads a small
   update feed. If a newer build exists, a green "Update available" badge appears in the top bar, and
-  clicking it shows the release notes and a Download link. "Check for updates" in the ? panel checks on
-  demand. Offline, the check fails silently.
+  clicking it shows the release notes. "Check for updates" in the ? panel checks on demand. Offline, the
+  check fails silently.
+  * ReelEdit.exe updates itself: click Update and it downloads in the background while you work, checks
+    the download's checksum and swaps in the new exe. Then "Restart now" (or just open it next time).
+    Keep the exe in a folder you can write to (Desktop, Documents, Downloads). If the update can't be
+    installed, it opens the download page instead.
+  * ReelEdit.html shows a Download link: get the new zip and open the new ReelEdit.html.
   * version.json holds the version, the build number (a whole number that goes up by 1 every release,
     which is what the update check compares), the date and the release notes.
   * To release: bump version, build and date in version.json and write the notes, commit, then run
     node release.js
     It builds the exe and zip, tags and pushes, creates the GitHub release with the zip attached, and
-    updates the feed. Use node release.js --dry to only build and zip.
+    updates the feed (with the zip's address and checksum, for the exe's self-update). The zip goes on
+    the "releases" repo in version.json (default "repo"), which must be public for the exe to download
+    it. Use node release.js --dry to only build and zip.
 
 Source code: src/ (core.js, proxy.js, export.js, timeline.js, ui.js, shell.html). To rebuild ReelEdit.html, run: node src/build.js
 Desktop shell: desktop/ (.NET 8 WinForms + WebView2, with the web app embedded). To rebuild the exe, run:
