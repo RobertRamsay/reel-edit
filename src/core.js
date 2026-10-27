@@ -108,6 +108,7 @@ function makeClip(m, tid, start) {
   if (mo - mi < frame()) mo = fin ? m.duration : P.settings.imgDur;
   const c = baseClip(kind, tid, start, mo);
   c.media = m.id; c.in = mi; c.out = mo; c.name = m.name;
+  if (kind === 'video' && m.picOnly) c.muted = true; // its sound was separated out to its own file
   return c;
 }
 function makeText(tid, start) {
@@ -306,6 +307,43 @@ function wavBlob(chs, sr) {
   }
   return new Blob(parts, { type: 'audio/wav' });
 }
+// a media file's sound as a WAV: the in-RAM copy analyzeAudio made, else decoded now
+async function audioWav(m) {
+  if (m.sndUrl) return (await fetch(m.sndUrl)).blob();
+  const buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(await m.file.arrayBuffer());
+  return wavBlob(Array.from({ length: buf.numberOfChannels }, (_, i) => buf.getChannelData(i)), buf.sampleRate);
+}
+const audioName = m => m.name.replace(/\.[^.]+$/, '') + ' (audio).wav';
+// video → its sound becomes its own audio file in the bin (and saved to disk); the video is used picture-only from then on
+async function separateAudio(m) {
+  if (m.hasAudio === false) return toast(m.name + ' has no sound', true);
+  toast('Separating the audio from ' + m.name + '…');
+  let wav;
+  try { wav = await audioWav(m); } catch (e) { m.hasAudio = false; return toast('No sound found in ' + m.name, true); }
+  const [a] = await importFiles([new File([wav], audioName(m), { type: 'audio/wav' })], { quiet: true });
+  if (!a) return;
+  const n = P.clips.filter(c => c.media === m.id && c.kind === 'video' && !c.muted).length;
+  edit(() => { m.picOnly = true; for (const c of P.clips) if (c.media === m.id && c.kind === 'video') c.muted = true; });
+  UI.binSel = a.id; renderBin();
+  download(wav, a.name);
+  toast(`Audio separated to “${a.name}” — ${m.name} now comes in muted` + (n ? ` (${n} clip${n > 1 ? 's' : ''} on the timeline muted)` : ''));
+}
+async function saveAudio(m) {
+  try { download(await audioWav(m), m.type === 'audio' && /\.wav$/i.test(m.name) ? m.name : audioName(m)); } catch (e) { toast("Couldn't read the sound in " + m.name, true); }
+}
+// clip volume that brings its loudest moment to −1 dBFS (from the waveform peaks, loudest channel)
+function normaliseGain(c) {
+  const m = media.get(c.media); if (!m || !m.peaks) return null;
+  const d = m.peaks.data, r = m.peaks.rate; let pk = 0;
+  for (let i = Math.floor(c.in * r), e = Math.min(d.length, Math.ceil(c.out * r)); i < e; i++) if (d[i] > pk) pk = d[i];
+  return pk > 1e-4 ? clamp(0.891 / pk, dbToVol(-40), dbToVol(12)) : null;
+}
+function cmdNormalise(cs) {
+  cs = cs.filter(c => c.kind === 'audio' || c.kind === 'video');
+  const gs = cs.map(normaliseGain);
+  if (!gs.some(g => g != null)) return toast('No waveform yet — wait for the audio to finish analysing', true);
+  edit(() => cs.forEach((c, i) => { if (gs[i] != null) c.volume = gs[i]; }), cs.length > 1 ? `Normalised ${gs.filter(g => g != null).length} clips to −1 dB peak` : `Normalised to −1 dB peak (${fmtDb(volToDb(gs[0]))})`);
+}
 async function analyzeAudio(m) {
   if (!(m.type === 'video' || m.type === 'audio') || !m.file) return;
   if (m.file.size > 600e6) { m.noPeaks = true; return; }
@@ -318,8 +356,8 @@ async function analyzeAudio(m) {
     const HOP = 512, env = new Float32Array(Math.ceil(n / HOP) + 1), nc = chs.length;
     let prev = 0;
     for (let i = 0; i < n; i++) {
-      let s = 0; for (let k = 0; k < nc; k++) s += chs[k][i]; s /= nc;
-      const a = s < 0 ? -s : s, pi = (i / per) | 0; if (a > peaks[pi]) peaks[pi] = a;
+      let s = 0, a = 0; for (let k = 0; k < nc; k++) { const v = chs[k][i]; s += v; if (v > a) a = v; else if (-v > a) a = -v; } s /= nc;
+      const pi = (i / per) | 0; if (a > peaks[pi]) peaks[pi] = a; // loudest channel, so Normalise never clips
       const d = s - prev; prev = s; env[(i / HOP) | 0] += d * d;
     }
     for (let i = 0; i < env.length; i++) env[i] = Math.sqrt(env[i] / HOP);

@@ -398,6 +398,7 @@ function makeClip(m, tid, start) {
   if (mo - mi < frame()) mo = fin ? m.duration : P.settings.imgDur;
   const c = baseClip(kind, tid, start, mo);
   c.media = m.id; c.in = mi; c.out = mo; c.name = m.name;
+  if (kind === 'video' && m.picOnly) c.muted = true; // its sound was separated out to its own file
   return c;
 }
 function makeText(tid, start) {
@@ -596,6 +597,43 @@ function wavBlob(chs, sr) {
   }
   return new Blob(parts, { type: 'audio/wav' });
 }
+// a media file's sound as a WAV: the in-RAM copy analyzeAudio made, else decoded now
+async function audioWav(m) {
+  if (m.sndUrl) return (await fetch(m.sndUrl)).blob();
+  const buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(await m.file.arrayBuffer());
+  return wavBlob(Array.from({ length: buf.numberOfChannels }, (_, i) => buf.getChannelData(i)), buf.sampleRate);
+}
+const audioName = m => m.name.replace(/\.[^.]+$/, '') + ' (audio).wav';
+// video → its sound becomes its own audio file in the bin (and saved to disk); the video is used picture-only from then on
+async function separateAudio(m) {
+  if (m.hasAudio === false) return toast(m.name + ' has no sound', true);
+  toast('Separating the audio from ' + m.name + '…');
+  let wav;
+  try { wav = await audioWav(m); } catch (e) { m.hasAudio = false; return toast('No sound found in ' + m.name, true); }
+  const [a] = await importFiles([new File([wav], audioName(m), { type: 'audio/wav' })], { quiet: true });
+  if (!a) return;
+  const n = P.clips.filter(c => c.media === m.id && c.kind === 'video' && !c.muted).length;
+  edit(() => { m.picOnly = true; for (const c of P.clips) if (c.media === m.id && c.kind === 'video') c.muted = true; });
+  UI.binSel = a.id; renderBin();
+  download(wav, a.name);
+  toast(`Audio separated to “${a.name}” — ${m.name} now comes in muted` + (n ? ` (${n} clip${n > 1 ? 's' : ''} on the timeline muted)` : ''));
+}
+async function saveAudio(m) {
+  try { download(await audioWav(m), m.type === 'audio' && /\.wav$/i.test(m.name) ? m.name : audioName(m)); } catch (e) { toast("Couldn't read the sound in " + m.name, true); }
+}
+// clip volume that brings its loudest moment to −1 dBFS (from the waveform peaks, loudest channel)
+function normaliseGain(c) {
+  const m = media.get(c.media); if (!m || !m.peaks) return null;
+  const d = m.peaks.data, r = m.peaks.rate; let pk = 0;
+  for (let i = Math.floor(c.in * r), e = Math.min(d.length, Math.ceil(c.out * r)); i < e; i++) if (d[i] > pk) pk = d[i];
+  return pk > 1e-4 ? clamp(0.891 / pk, dbToVol(-40), dbToVol(12)) : null;
+}
+function cmdNormalise(cs) {
+  cs = cs.filter(c => c.kind === 'audio' || c.kind === 'video');
+  const gs = cs.map(normaliseGain);
+  if (!gs.some(g => g != null)) return toast('No waveform yet — wait for the audio to finish analysing', true);
+  edit(() => cs.forEach((c, i) => { if (gs[i] != null) c.volume = gs[i]; }), cs.length > 1 ? `Normalised ${gs.filter(g => g != null).length} clips to −1 dB peak` : `Normalised to −1 dB peak (${fmtDb(volToDb(gs[0]))})`);
+}
 async function analyzeAudio(m) {
   if (!(m.type === 'video' || m.type === 'audio') || !m.file) return;
   if (m.file.size > 600e6) { m.noPeaks = true; return; }
@@ -608,8 +646,8 @@ async function analyzeAudio(m) {
     const HOP = 512, env = new Float32Array(Math.ceil(n / HOP) + 1), nc = chs.length;
     let prev = 0;
     for (let i = 0; i < n; i++) {
-      let s = 0; for (let k = 0; k < nc; k++) s += chs[k][i]; s /= nc;
-      const a = s < 0 ? -s : s, pi = (i / per) | 0; if (a > peaks[pi]) peaks[pi] = a;
+      let s = 0, a = 0; for (let k = 0; k < nc; k++) { const v = chs[k][i]; s += v; if (v > a) a = v; else if (-v > a) a = -v; } s /= nc;
+      const pi = (i / per) | 0; if (a > peaks[pi]) peaks[pi] = a; // loudest channel, so Normalise never clips
       const d = s - prev; prev = s; env[(i / HOP) | 0] += d * d;
     }
     for (let i = 0; i < env.length; i++) env[i] = Math.sqrt(env[i] / HOP);
@@ -2603,7 +2641,7 @@ function renderBin() {
     if (f && !m.name.toLowerCase().includes(f)) continue;
     const cv = h('canvas', { width: 160, height: 90 });
     const card = h('div', { class: 'bcard' + (UI.binSel === m.id ? ' sel' : '') + (m.offline ? ' off' : ''), draggable: !m.offline, title: m.name + (m.offline ? '\nOFFLINE — click to relink' : '\nDouble-click: open in Source viewer · drag to timeline · E append') },
-      cv, h('div', { class: 'bmeta' }, h('span', { class: 'bt ' + m.type }), h('span', { class: 'bn' }, m.name), h('span', { class: 'bd' }, m.offline ? 'OFFLINE' : isFinite(m.duration) ? fmtS(m.duration) : 'still')));
+      cv, h('div', { class: 'bmeta' }, h('span', { class: 'bt ' + m.type }), h('span', { class: 'bn' }, m.name), h('span', { class: 'bd' }, m.offline ? 'OFFLINE' : (m.picOnly ? '🔇 ' : '') + (isFinite(m.duration) ? fmtS(m.duration) : 'still'))));
     card.dataset.id = m.id; m._cv = cv; m._card = card;
     drawBinThumb(m);
     cv.addEventListener('mousemove', e => { if (m.type === 'video' && m.thumbs && m.thumbs.length > 1) { const r = cv.getBoundingClientRect(); drawBinThumb(m, clamp((e.clientX - r.left) / r.width, 0, 1)); } });
@@ -2773,7 +2811,9 @@ function inspClip(c) {
   if (c.kind === 'video' || c.kind === 'audio') {
     B.append(sec(['Audio', c.kind === 'video' ? h('button', { onclick: () => detachAudio(c), title: 'Copy the audio onto an audio track and mute it here' }, 'Detach') : null],
       rowR('Volume', () => volToDb(c.volume), v => { c.volume = dbToVol(v); }, { min: -40, max: 12, step: 0.5, fmt: fmtDb, def: 0 }),
-      rowB('Mute', () => c.muted, v => { c.muted = v; })));
+      rowB('Mute', () => c.muted, v => { c.muted = v; }),
+      h('div', { class: 'btnrow' }, h('button', { onclick: () => cmdNormalise([c]), disabled: !(m && m.peaks), title: 'Set the volume so the loudest moment of this clip peaks at −1 dB' }, 'Normalise'),
+        h('button', { onclick: () => edit(() => { c.volume = 1; }) }, '0 dB'))));
   }
   const maxF = Math.max(frame(), Math.min(10, cdur(c)));
   B.append(sec('Fades',
@@ -2934,6 +2974,7 @@ function clipMenu(x, y, c, t) {
     { chips: [{ label: '', cls: 'swatch', style: 'background:#555b66', act: () => edit(() => selClips().forEach(k => k.label = null)) }, ...Object.entries(LABELS).map(([k, v]) => ({ label: '', cls: 'swatch', style: `background:${v}`, act: () => edit(() => selClips().forEach(s => s.label = k)) }))], label: 'Label' },
     '-',
     c.kind === 'video' && m && m.hasAudio !== false ? { label: 'Detach audio', act: () => detachAudio(c) } : null,
+    (c.kind === 'video' || c.kind === 'audio') && m && m.peaks ? { label: UI.sel.size > 1 ? 'Normalise selected (−1 dB peak)' : 'Normalise (−1 dB peak)', act: () => cmdNormalise(selClips()) } : null,
     (c.kind === 'video' || c.kind === 'audio') ? { label: c.muted ? 'Unmute clip' : 'Mute clip', act: () => edit(() => { c.muted = !c.muted; }) } : null,
     m && m.env ? { label: '♪ Detect beats → markers', act: () => cmdBeats(c) } : null,
     multi ? { label: 'Cut selected to beat (2 beats)', act: () => beatCut(2) } : null,
@@ -2969,6 +3010,10 @@ function binMenu(x, y, m) {
     { label: 'Append to timeline', key: 'E', act: () => placeMedia(m, 'append'), disabled: m.offline },
     { label: 'Insert at playhead', key: ',', act: () => placeMedia(m, 'insert'), disabled: m.offline },
     { label: 'Overwrite at playhead', key: '.', act: () => placeMedia(m, 'overwrite'), disabled: m.offline },
+    m.type === 'video' && m.hasAudio !== false ? '-' : null,
+    m.type === 'video' && m.hasAudio !== false ? { label: 'Separate audio → new audio file', act: () => separateAudio(m), disabled: m.offline } : null,
+    m.type === 'video' && m.hasAudio !== false ? { label: m.picOnly ? 'Use with its sound again' : 'Use picture only (mute its sound)', act: () => { m.picOnly = !m.picOnly; renderBin(); scheduleAutosave(); toast(m.picOnly ? m.name + ' now comes in muted' : m.name + ' now comes in with its sound'); } } : null,
+    (m.type === 'video' && m.hasAudio !== false) || m.type === 'audio' ? { label: 'Save audio as WAV…', act: () => saveAudio(m), disabled: m.offline } : null,
     m.type === 'video' && canProxy(m) ? (m.proxy ? { label: 'Discard proxy (use original)', act: () => discardProxy(m) } : (m.proxyState && /queued|building/.test(m.proxyState.status)) ? { label: 'Cancel proxy', act: () => discardProxy(m) } : { label: 'Make proxy (smooth preview)', act: () => queueProxy(m) }) : null,
     m.info ? { head: m.info } : null,
     '-', { label: 'Relink to another file…', act: () => { pendingRelink = m; $('#fileIn').click(); } },
@@ -3197,7 +3242,7 @@ function grabFrame() {
 /* ---------- project save / load / autosave ---------- */
 function projectJSON() {
   return { app: 'ReelEdit', v: 1, saved: new Date().toISOString(), project: JSON.parse(snapState()),
-    media: [...media.values()].map(m => ({ id: m.id, name: m.name, size: m.size, type: m.type, duration: isFinite(m.duration) ? m.duration : null, w: m.w, h: m.h, markIn: m.markIn ?? null, markOut: m.markOut ?? null })) };
+    media: [...media.values()].map(m => ({ id: m.id, name: m.name, size: m.size, type: m.type, duration: isFinite(m.duration) ? m.duration : null, w: m.w, h: m.h, markIn: m.markIn ?? null, markOut: m.markOut ?? null, picOnly: !!m.picOnly })) };
 }
 function saveProject() {
   const blob = new Blob([JSON.stringify(projectJSON(), null, 1)], { type: 'application/json' });
@@ -3209,7 +3254,7 @@ function loadProject(o) {
   const idMap = {};
   for (const mm of o.media || []) {
     const ex = [...media.values()].find(x => !x.offline && x.name === mm.name && (!mm.size || x.size === mm.size));
-    if (ex) { idMap[mm.id] = ex.id; continue; }
+    if (ex) { idMap[mm.id] = ex.id; ex.picOnly = !!mm.picOnly; continue; }
     if (media.has(mm.id)) { idMap[mm.id] = mm.id; continue; }
     media.set(mm.id, { ...mm, duration: mm.duration == null ? Infinity : mm.duration, offline: true });
     idMap[mm.id] = mm.id;

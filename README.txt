@@ -100,6 +100,15 @@ Notes
     size automatically when your machine can't keep up at full size.
   * Press ? in the app for the full list of shortcuts.
 
+Separating sound from video
+  Right-click a video in the bin:
+  * Separate audio → new audio file: saves the sound as "<name> (audio).wav", adds it to the bin, and
+    from then on the video comes into the timeline muted (any of its clips already there are muted too).
+  * Use picture only / Use with its sound again: the same muting without making a file.
+  * Save audio as WAV…: just saves the sound.
+  Right-click an audio or video clip → Normalise (or the Normalise button in the inspector) sets its
+  volume so its loudest moment peaks at −1 dB.
+
 Version and updates
   The version shows next to the logo (hover it for the build number and date), in the ? panel and in the
   exe's window title. A few seconds after start-up, and every 6 hours after that, the app reads a small
