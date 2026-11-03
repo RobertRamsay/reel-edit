@@ -15,8 +15,9 @@ const RF_EASE = { smooth: p => p * p * (3 - 2 * p), linear: p => p, hold: () => 
 function rfAt(t) {
   const R = P.reframe; if (!R) return { x: 0.5, y: 0.5, z: 1 };
   const k = R.keys; if (!k.length) return { x: R.x, y: R.y, z: R.z };
-  if (t <= k[0].t) return k[0];
-  const l = k[k.length - 1]; if (t >= l.t) return l;
+  // always a copy: callers (the viewer drag) hold on to it while keys are being edited
+  if (t <= k[0].t) return { x: k[0].x, y: k[0].y, z: k[0].z };
+  const l = k[k.length - 1]; if (t >= l.t) return { x: l.x, y: l.y, z: l.z };
   let i = 1; while (k[i].t < t) i++;
   const a = k[i - 1], b = k[i], p = (RF_EASE[a.ease] || RF_EASE.smooth)((t - a.t) / (b.t - a.t));
   // zoom eases in log space so a zoom-in feels even all the way
@@ -89,8 +90,9 @@ function rfToggleView(on = UI.view !== 'reframe') {
   st.addEventListener('pointerdown', e => {
     if (!rfView() || e.button !== 0) return;
     e.preventDefault(); st.setPointerCapture(e.pointerId);
-    const f = rfAt(UI.t), r = rfRect(UI.t);
-    drag = { x0: e.clientX, y0: e.clientY, f, k: r.sw / st.getBoundingClientRect().width };
+    // start from where the window is on screen (its stored centre can sit past a frame edge after a zoom)
+    const r = rfRect(UI.t);
+    drag = { x0: e.clientX, y0: e.clientY, cx: r.sx + r.sw / 2, cy: r.sy + r.sh / 2, k: r.sw / st.getBoundingClientRect().width };
     beginEdit(); if (UI.playing) pause();
   });
   st.addEventListener('pointermove', e => {
@@ -98,7 +100,7 @@ function rfToggleView(on = UI.view !== 'reframe') {
     const dx = (e.clientX - drag.x0) * drag.k, dy = (e.clientY - drag.y0) * drag.k;
     // dragging moves the picture, so the window moves the other way; pinned to the frame edges
     const r0 = rfRect(UI.t), W = P.settings.w, H = P.settings.h;
-    rfSet({ x: clamp(drag.f.x * W - dx, r0.sw / 2, W - r0.sw / 2) / W, y: clamp(drag.f.y * H - dy, r0.sh / 2, H - r0.sh / 2) / H });
+    rfSet({ x: clamp(drag.cx - dx, r0.sw / 2, W - r0.sw / 2) / W, y: clamp(drag.cy - dy, r0.sh / 2, H - r0.sh / 2) / H });
     dirtyPV = dirtyTL = true; rfInfo();
   });
   const end = () => { if (!drag) return; drag = null; endEdit(); changed(); };
