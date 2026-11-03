@@ -284,7 +284,13 @@ function soloClip(t) {
 async function exportOffline(o, ui) {
   const end0 = tlEnd(), start = o.range === 'io' ? (P.inPt ?? 0) : 0, end = o.range === 'io' ? (P.outPt ?? end0) : end0;
   const fpsO = P.settings.fps, N = Math.max(1, Math.round((end - start) * fpsO));
-  const OW = even(P.settings.w * o.scale), OH = even(P.settings.h * o.scale), S = OW / P.settings.w;
+  // reframe: output is the vertical window; sources are decoded big enough for the deepest zoom in the range
+  let OW = even(P.settings.w * o.scale), OH = even(P.settings.h * o.scale), S = OW / P.settings.w, readW = OW, readH = OH;
+  if (o.reframe) {
+    [OW, OH] = rfShape().out.map(v => even(v * o.scale));
+    let zmax = rfAt(start).z; for (const k of P.reframe.keys) if (k.t >= start && k.t <= end) zmax = Math.max(zmax, k.z);
+    S = OH / P.settings.h * zmax; readW = even(P.settings.w * S); readH = even(P.settings.h * S);
+  }
   const vcfg = await pickH264(OW, OH, fpsO, o.vbps); if (!vcfg) throw new Error('no H.264 encoder available');
   const SR = 48000, acfg = await pickAudio(SR);
   const cv = document.createElement('canvas'); cv.width = OW; cv.height = OH;
@@ -308,7 +314,7 @@ async function exportOffline(o, ui) {
           if (c.kind !== 'video' || !c.media || !(t >= c.start - EPS && t < cend(c) - EPS)) continue;
           const m = media.get(c.media); if (!m || m.offline) continue;
           const st = Math.min(c.in + (t - c.start) * c.speed, c.out - 1e-3);
-          let r = readers.get(c.id); if (!r) { r = makeReader(m, st, c, OW, OH); readers.set(c.id, r); }
+          let r = readers.get(c.id); if (!r) { r = makeReader(m, st, c, readW, readH); readers.set(c.id, r); }
           let fr = await r.frameAt(st);
           if (fr && r.scale) fr = r.scale(fr);
           if (fr) srcMap.set(c.id, fr);
@@ -317,14 +323,14 @@ async function exportOffline(o, ui) {
       for (const [id, r] of readers) { const c = clipById(id); if (!c || t >= cend(c) - EPS) { r.close(); readers.delete(id); } }
       while (venc.encodeQueueSize > 4) await codecWait(venc);
       const ts = { timestamp: Math.round(n * 1e6 / fpsO), duration: Math.round(1e6 / fpsO) };
-      const solo = soloClip(t), sf = solo && srcMap.get(solo.id);
+      const solo = !o.reframe && soloClip(t), sf = solo && srcMap.get(solo.id);
       let vf;
       if (sf && (sf.width ?? sf.displayWidth) === OW && (sf.height ?? sf.displayHeight) === OH) {
         // fast path: the GPU-scaled (or native-size) decoded frame goes straight in, no compositing — ~85 vs ~35 fps at 4K→1080p
         vf = new VideoFrame(sf, ts); fastFrames++;
       } else {
         g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.filter = 'none'; g.fillStyle = P.settings.bg; g.fillRect(0, 0, OW, OH);
-        renderTimelineFrame(g, t, S);
+        if (o.reframe) renderReframed(g, t, OW, OH); else renderTimelineFrame(g, t, S);
         // hand the encoder plain pixels: frames built straight from a 2D GPU canvas hit a slow ~10 fps
         // path in Chrome's encoders; reading back first measured ~5× faster (48 vs 10 fps at 1080p)
         const px = g.getImageData(0, 0, OW, OH).data;

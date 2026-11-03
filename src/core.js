@@ -31,13 +31,13 @@ const EASE = { linear: p => p, smooth: p => p * p * (3 - 2 * p), in: p => p * p,
 const P = {
   name: 'Untitled Reel',
   settings: { w: 1920, h: 1080, fps: 30, bg: '#000000', xfType: 'dissolve', xfDur: 0.5, imgDur: 3 },
-  tracks: [], clips: [], markers: [], inPt: null, outPt: null,
+  tracks: [], clips: [], markers: [], inPt: null, outPt: null, reframe: null,
 };
 const media = new Map();
 const UI = {
   pps: 80, sx: 0, sy: 0, t: 0, playing: false, rate: 1,
   sel: new Set(), selXf: null, tool: 'select', snap: true, autoX: true, ripple: false, loop: false,
-  pvScale: 1, guides: false, mode: 'timeline', src: null, targetV: null, targetA: null, binSel: null,
+  pvScale: 1, guides: false, mode: 'timeline', view: 'main', src: null, targetV: null, targetA: null, binSel: null,
   proxy: true, tScale: 1, hover: null, snapLine: null, ghost: null, drag: null, clipboard: null, info: null, bladeT: null,
 };
 let dirtyPV = true, dirtyTL = true, EXP = null;
@@ -218,8 +218,8 @@ function editPoints() {
 
 /* ---------- history ---------- */
 const HIST = { undo: [], redo: [] };
-function snapState() { return JSON.stringify({ name: P.name, settings: P.settings, tracks: P.tracks, clips: P.clips, markers: P.markers, inPt: P.inPt, outPt: P.outPt }); }
-function loadState(s) { const o = JSON.parse(s); Object.assign(P, o); }
+function snapState() { return JSON.stringify({ name: P.name, settings: P.settings, tracks: P.tracks, clips: P.clips, markers: P.markers, inPt: P.inPt, outPt: P.outPt, reframe: P.reframe }); }
+function loadState(s) { const o = JSON.parse(s); Object.assign(P, { reframe: null }, o); }
 function commit(before) {
   if (before === snapState()) return false;
   HIST.undo.push(before); if (HIST.undo.length > 300) HIST.undo.shift(); HIST.redo.length = 0;
@@ -229,7 +229,9 @@ function edit(fn, msg) { const b = snapState(); const r = fn(); if (commit(b)) {
 function afterRestore() {
   UI.sel = new Set([...UI.sel].filter(id => clipById(id)));
   if (UI.selXf && !clipById(UI.selXf)) UI.selXf = null;
-  ensureTargets(); $('#projName').value = P.name; resizePreview(); renderHeads(); changed();
+  ensureTargets(); $('#projName').value = P.name;
+  if (UI.view === 'reframe' && (!P.reframe || !rfPossible())) rfToggleView(false);
+  resizePreview(); renderHeads(); changed();
 }
 function undo() { if (!HIST.undo.length) return toast('Nothing to undo'); HIST.redo.push(snapState()); loadState(HIST.undo.pop()); afterRestore(); scheduleAutosave(); updUndoBtns(); toast('Undo'); }
 function redo() { if (!HIST.redo.length) return toast('Nothing to redo'); HIST.undo.push(snapState()); loadState(HIST.redo.pop()); afterRestore(); scheduleAutosave(); updUndoBtns(); toast('Redo'); }
@@ -536,6 +538,7 @@ function setTime(t) {
   if (UI.playing) { t0 = UI.t; p0 = performance.now(); } else scheduleHQ();
   syncMedia(UI.t, UI.playing && UI.rate > 0);
   dirtyPV = dirtyTL = true;
+  if (rfView() && !UI.playing) rfInspSoon();
 }
 function play(rate = 1) {
   ensureAudio();
@@ -570,13 +573,18 @@ function followPlayhead() {
 
 /* ---------- preview render ---------- */
 const pv = $('#pv'), pg = pv.getContext('2d', { alpha: false });
+// preview canvas size: the project frame, or in the 9:16 viewer a full-height vertical window
+function pvDims(s) {
+  if (rfView()) { const hh = Math.round(P.settings.h * s); return [Math.round(hh * rfShape().ar), hh]; }
+  return [Math.round(P.settings.w * s), Math.round(P.settings.h * s)];
+}
 function resizePreview() {
-  pv.width = Math.round(P.settings.w * UI.pvScale); pv.height = Math.round(P.settings.h * UI.pvScale);
+  [pv.width, pv.height] = pvDims(UI.pvScale);
   fitStage(); buildGuides(); dirtyPV = true; updInfo();
 }
 function fitStage() {
   const wrap = $('#stageWrap'), st = $('#stage');
-  const W = wrap.clientWidth - 40, H = wrap.clientHeight - 20, ar = P.settings.w / P.settings.h;
+  const W = wrap.clientWidth - 40, H = wrap.clientHeight - 20, ar = pv.width / pv.height;
   let w = W, hh = W / ar; if (hh > H) { hh = H; w = H * ar; }
   st.style.width = Math.max(10, w) + 'px'; st.style.height = Math.max(10, hh) + 'px';
 }
@@ -714,7 +722,8 @@ function renderPreview() {
   if (UI.mode === 'source') return renderSource(g, W, H);
   const t0 = performance.now();
   frameQual = null;
-  renderTimelineFrame(g, UI.t, W / P.settings.w);
+  if (rfView()) renderReframed(g, UI.t, W, H); else renderTimelineFrame(g, UI.t, W / P.settings.w);
+  rfInfo();
   updQual();
   pvDrawMs = pvDrawMs * 0.85 + (performance.now() - t0) * 0.15;
 }
@@ -764,7 +773,7 @@ function setMode(mode) {
   $('#viewer').classList.toggle('source', mode === 'source');
   $('#tabTL').classList.toggle('on', mode === 'timeline'); $('#tabSrc').classList.toggle('on', mode === 'source');
   if (mode === 'source') { sizeSrcBar(); drawSrcBar(); }
-  updPlayBtn(); dirtyPV = true; updInfo();
+  updPlayBtn(); resizePreview(); updInfo();
 }
 const srcT = () => srcEl ? srcEl.currentTime : 0;
 function srcPlay(rate) { if (!srcEl) return; srcEl.playbackRate = Math.max(0.25, Math.abs(rate)); const pr = srcEl.play(); if (pr) pr.catch(() => { }); updPlayBtn(); }

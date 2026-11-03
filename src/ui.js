@@ -145,7 +145,7 @@ function renderInsp() {
   if (UI.selXf) { const c = clipById(UI.selXf); if (c) inspXf(c); else UI.selXf = null; }
   if (!UI.selXf) {
     const cs = selClips();
-    if (!cs.length) inspProject(); else if (cs.length === 1) inspClip(cs[0]); else inspMulti(cs);
+    if (!cs.length && rfView()) inspReframe(); else if (!cs.length) inspProject(); else if (cs.length === 1) inspClip(cs[0]); else inspMulti(cs);
   }
   B.scrollTop = st;
 }
@@ -172,6 +172,8 @@ function inspProject() {
     rowN('Height', () => S.h, v => { S.h = Math.round(v / 2) * 2; resizePreview(); }, { min: 64, max: 7680, step: 2, suffix: 'px' }),
     rowS('Frame rate', () => String(S.fps), v => { S.fps = +v; }, [['24', '24 fps'], ['25', '25 fps'], ['30', '30 fps'], ['50', '50 fps'], ['60', '60 fps']]),
     rowC('Background', () => S.bg, v => { S.bg = v; })));
+  if (rfPossible()) B.append(sec('Vertical version', h('div', { class: 'note' }, 'Make a 9:16 (or 4:5 / 1:1) version of this landscape edit: position and zoom a vertical window, with keyframes.'),
+    h('div', { class: 'btnrow' }, h('button', { class: 'primary', onclick: () => rfToggleView(true) }, 'Open the 9:16 viewer'))));
   B.append(sec('Defaults',
     rowS('Transition', () => S.xfType, v => { S.xfType = v; $('#xfType').value = v; }, Object.entries(XF)),
     rowN('Length', () => S.xfDur, v => { S.xfDur = v; $('#xfDur').value = v; }, { min: 0.04, max: 10, step: 0.05, suffix: 's' }),
@@ -310,6 +312,29 @@ function xfSection(B, A) {
     rowN('Length', () => ov, v => { const b = snapState(); setOverlap(A, B, q(v)); if (!trackValid(B.track, true)) loadState(b); }, { min: frame(), step: frame(), suffix: 's' }),
     h('div', { class: 'btnrow' }, h('button', { onclick: () => edit(() => { let n = 0; for (const tr of P.tracks) { const cs = clipsOn(tr.id); for (let i = 1; i < cs.length; i++) if (cs[i].start < cend(cs[i - 1]) - EPS) { cs[i].xf = { ...B.xf }; n++; } } return n; }, n => `Applied to ${n} transitions`) }, 'Apply to all transitions')),
     h('div', { class: 'note', style: 'margin-top:6px' }, 'Audio cross-fades automatically (equal-power); dip transitions dip the sound too.'));
+}
+function inspReframe() {
+  $('#inspTitle').textContent = 'Vertical reframe';
+  const B = $('#inspBody'), R = P.reframe, f = rfAt(UI.t), ki = rfKeyAt(q(UI.t)), n = R.keys.length;
+  const at = ki >= 0 ? R.keys[ki] : R.keys.filter(k => k.t < UI.t).pop();
+  const set = v => { rfSet(v); dirtyPV = dirtyTL = true; };
+  B.append(sec('Window',
+    rowS('Shape', () => R.ar, v => { R.ar = v; resizePreview(); }, Object.entries(RF).map(([k, v]) => [k, `${v.label} · ${v.out[0]}×${v.out[1]}`])),
+    rowR('Position X', () => f.x, v => set({ x: v }), { min: 0, max: 1, step: 0.001, fmt: v => Math.round(v * 100) + '%', def: 0.5 }),
+    rowR('Position Y', () => f.y, v => set({ y: v }), { min: 0, max: 1, step: 0.001, fmt: v => Math.round(v * 100) + '%', def: 0.5 }),
+    rowR('Zoom', () => f.z, v => set({ z: v }), { min: 1, max: RF_ZMAX, step: 0.01, fmt: v => v.toFixed(2) + '×', def: 1 }),
+    h('div', { class: 'note' }, 'Drag in the viewer to move the window, scroll to zoom, double-click to centre. 1× is the full height of the frame.' + (n ? ' With keys, every change keys the playhead.' : ''))));
+  B.append(sec(['Keyframes', n ? h('button', { onclick: () => edit(() => { R.x = f.x; R.y = f.y; R.z = f.z; R.keys = []; }, 'Keyframes cleared — framing held where it was') }, 'Clear all') : null],
+    h('div', { class: 'stat' }, 'Keys', h('b', {}, n ? `${n}${ki >= 0 ? ' · on one now' : ''}` : 'none — one framing for the whole video')),
+    h('div', { class: 'btnrow' },
+      h('button', { onclick: () => rfJump(-1), disabled: !R.keys.some(k => k.t < UI.t - 1e-4), title: 'Previous key' }, '◀ Prev'),
+      ki >= 0 ? h('button', { onclick: () => edit(() => { R.keys.splice(ki, 1); }, 'Key deleted') }, 'Delete key')
+        : h('button', { class: 'primary', onclick: () => edit(() => rfAddKey(), 'Key added at ' + fmtTC(UI.t)) }, '◆ Add key here'),
+      h('button', { onclick: () => rfJump(1), disabled: !R.keys.some(k => k.t > UI.t + 1e-4), title: 'Next key' }, 'Next ▶')),
+    at ? h('div', { class: 'row' }, h('label', { title: 'How the window moves from this key to the next' }, 'Move to next'),
+      chips([['Smooth', at.ease === 'smooth'], ['Linear', at.ease === 'linear'], ['Cut', at.ease === 'hold', 'Holds, then jumps at the next key — for shot changes']].map(([l, on, title]) => [l, on, () => edit(() => { at.ease = { Smooth: 'smooth', Linear: 'linear', Cut: 'hold' }[l]; }), title])), h('span')) : null,
+    h('div', { class: 'btnrow' }, h('button', { onclick: () => edit(() => rfKeysAtCuts(), k => k ? `Added ${k} keys at the cuts — now position each shot` : 'Every cut already has a key'), title: 'A key at every cut that holds until the next, so each shot gets its own framing' }, 'Key every cut'))));
+  B.append(sec('Export', h('div', { class: 'note' }, `Export → Frame → “Reframe ${rfShape().label}” renders this window at ${rfShape().out.join('×')}.`)));
 }
 function inspXf(B) {
   const [A] = neighbors(B);
@@ -538,11 +563,13 @@ async function openExport() {
   const rng = h('select', {}, h('option', { value: 'all' }, `Whole timeline · ${fmtTC(end)}`), hasIO ? h('option', { value: 'io', selected: true }, `In → Out · ${fmtTC((P.outPt ?? end) - (P.inPt ?? 0))}`) : null);
   // output frame: the project's, or another shape (the timeline is re-laid out into it, each clip keeping its Fit/Fill)
   const proj = `${P.settings.w}x${P.settings.h}`, det = footageFrame();
+  const rf = P.reframe && rfPossible() ? rfShape() : null;
   const frm = h('select', {}, h('option', { value: proj }, `Project · ${P.settings.w}×${P.settings.h}`),
-    FRAMES.slice(0, 4).filter(([k]) => k !== proj).map(([k, l]) => h('option', { value: k, selected: k === det }, l + (k === det ? ' — matches your footage' : ''))));
+    rf ? h('option', { value: 'reframe', selected: true }, `Reframe ${rf.label} (your window${P.reframe.keys.length ? ' + keys' : ''}) · ${rf.out.join('×')}`) : null,
+    FRAMES.slice(0, 4).filter(([k]) => k !== proj).map(([k, l]) => h('option', { value: k, selected: !rf && k === det }, l + (k === det ? ' — matches your footage' : ''))));
   const res = h('select', {});
   const syncRes = () => {
-    const [w, hh] = frm.value.split('x').map(Number), v = res.value || '1';
+    const [w, hh] = frm.value === 'reframe' ? rfShape().out : frm.value.split('x').map(Number), v = res.value || '1';
     res.innerHTML = ''; res.append(h('option', { value: 1 }, `Full · ${w}×${hh}`), h('option', { value: 0.5 }, `Half · ${even(w / 2)}×${even(hh / 2)}`)); res.value = v;
   };
   frm.onchange = syncRes; syncRes();
@@ -568,7 +595,7 @@ async function openExport() {
     ...vidRows,
     h('div', { class: 'row' }, h('label', {}, 'File name'), nm), warn, note,
     h('div', { class: 'foot' }, h('button', { onclick: closeModal }, 'Cancel'), h('button', { class: 'primary', onclick: () => {
-      const o = { range: rng.value, scale: +res.value, vbps: +br.value * 1e6, name: nm.value || 'reel' }, fr = frm.value.split('x').map(Number);
+      const o = { range: rng.value, scale: +res.value, vbps: +br.value * 1e6, name: nm.value || 'reel', reframe: frm.value === 'reframe' }, fr = o.reframe ? [P.settings.w, P.settings.h] : frm.value.split('x').map(Number);
       if (eng.value === 'wav' || eng.value === 'm4a') runAudioExport({ ...o, kind: eng.value });
       else if (eng.value === 'offline') withFrame(fr, () => runOfflineExport(o)); else withFrame(fr, () => startExport({ ...o, mime: fm[+fmt.value].mime, mute: mute.checked, proxy: useProx.checked }));
     } }, 'Render & download'))));
@@ -626,13 +653,13 @@ async function startExport(o) {
   if (end - start < frame()) return toast('Range is empty', true);
   ensureAudio(); try { await actx.resume(); } catch (e) { }
   if (UI.playing) pause(); setMode('timeline');
-  const prevScale = UI.pvScale, prevLoop = UI.loop; UI.pvScale = o.scale; UI.loop = false; resizePreview();
+  const prevScale = UI.pvScale, prevLoop = UI.loop, prevView = UI.view; UI.pvScale = o.scale; UI.loop = false; UI.view = o.reframe ? 'reframe' : 'main'; resizePreview();
   exportSrcProxy = !!o.proxy;
   monitor.gain.value = o.mute ? 0 : 1;
   const bar = h('i'), lab = h('div', { class: 'note' }, 'Preparing…');
   const cancelBtn = h('button', { onclick: cancelExport }, 'Cancel (Esc)');
   $('#mbox').innerHTML = ''; $('#mbox').append(h('h2', {}, 'Rendering ' + o.name), h('div', { class: 'pbar' }, bar), lab, h('div', { class: 'foot' }, cancelBtn));
-  const restore = () => { exportSrcProxy = null; UI.pvScale = prevScale; UI.loop = prevLoop; resizePreview(); monitor.gain.value = 1; EXP = null; $('#modal').hidden = true; };
+  const restore = () => { exportSrcProxy = null; UI.pvScale = prevScale; UI.loop = prevLoop; UI.view = prevView; resizePreview(); monitor.gain.value = 1; EXP = null; $('#modal').hidden = true; };
   setTime(start); await waitReady(); renderPreview();
   const stream = pv.captureStream(fps()), at = recDest.stream.getAudioTracks()[0];
   if (at) stream.addTrack(at);
@@ -663,7 +690,7 @@ function download(blob, name) {
   document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
 }
 function grabFrame() {
-  const prev = UI.pvScale; UI.pvScale = 1; pv.width = P.settings.w; pv.height = P.settings.h; renderPreview();
+  const prev = UI.pvScale; UI.pvScale = 1; [pv.width, pv.height] = pvDims(1); renderPreview();
   pv.toBlob(async b => {
     UI.pvScale = prev; resizePreview();
     if (!b) return;
@@ -717,7 +744,7 @@ function loadPrefs() {
 function newProject() {
   if (P.clips.length && !confirm('Start a new project? The timeline is cleared (your media bin is kept).')) return;
   if (UI.playing) pause();
-  P.clips = []; P.markers = []; P.inPt = P.outPt = null; P.name = 'Untitled Reel'; defaultTracks();
+  P.clips = []; P.markers = []; P.inPt = P.outPt = null; P.name = 'Untitled Reel'; P.reframe = null; defaultTracks();
   HIST.undo = []; HIST.redo = []; updUndoBtns(); UI.sel.clear(); UI.selXf = null; UI.t = 0; UI.sx = 0;
   afterRestore(); renderBin();
 }
@@ -731,7 +758,7 @@ $('#bUndo').onclick = undo; $('#bRedo').onclick = redo; $('#bHelp').onclick = op
 $('#projName').onchange = e => { edit(() => { P.name = e.target.value.trim() || 'Untitled Reel'; }); };
 $('#binFilter').oninput = renderBin;
 $('#bText').onclick = () => addGenerator('text'); $('#bMatte').onclick = () => addGenerator('color');
-$('#tabTL').onclick = () => setMode('timeline'); $('#tabSrc').onclick = () => setMode('source');
+$('#tabTL').onclick = () => setMode('timeline'); $('#tabSrc').onclick = () => setMode('source'); $('#tabRF').onclick = () => rfToggleView();
 $('#tStart').onclick = () => UI.mode === 'source' ? srcSeek(0) : (setTime(0), UI.sx = 0);
 $('#tEnd').onclick = () => UI.mode === 'source' ? srcSeek(UI.src.duration) : (setTime(tlEnd()), followPlayhead());
 $('#tBack').onclick = () => UI.mode === 'source' ? srcStep(-1) : step(-1);
@@ -787,7 +814,7 @@ function buildGuides() {
   const box = (l, t, w, hh, cls = '') => g.append(h('div', { class: cls, style: `left:${l}%;top:${t}%;width:${w}%;height:${hh}%` }));
   box(5, 5, 90, 90); box(10, 10, 80, 80);
   for (const f of [33.333, 66.666]) { box(f, 0, 0.12, 100, 'th'); box(0, f, 100, 0.2, 'th'); }
-  if (P.settings.h > P.settings.w) { box(0, 0, 100, 12, 'zone'); box(0, 78, 100, 22, 'zone'); box(84, 45, 16, 33, 'zone'); }
+  if (P.settings.h > P.settings.w || rfView()) { box(0, 0, 100, 12, 'zone'); box(0, 78, 100, 22, 'zone'); box(84, 45, 16, 33, 'zone'); }
 }
 const mt = $('#meter'), mg = mt.getContext('2d');
 function drawMeter() {

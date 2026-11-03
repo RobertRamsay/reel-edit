@@ -139,6 +139,11 @@ function drawRuler(g, tk, end) {
     const lab = tk.major < 1 ? fmtTC(t) : (t >= 3600 ? Math.floor(t / 3600) + ':' : '') + String(Math.floor(t / 60) % 60).padStart(t >= 3600 ? 2 : 1, '0') + ':' + String(Math.round(t % 60) % 60).padStart(2, '0');
     g.fillText(lab, Math.round(X(t)) + 4, 10);
   }
+  if (P.reframe && P.reframe.keys.length && UI.view === 'reframe') for (const k of P.reframe.keys) {
+    const x = Math.round(X(k.t)) + .5; if (x < -6 || x > TW + 6) continue;
+    g.fillStyle = Math.abs(k.t - UI.t) < 0.5 / fps() ? '#fff' : '#ff8a3d';
+    g.beginPath(); g.moveTo(x, RULER - 11); g.lineTo(x + 4, RULER - 7); g.lineTo(x, RULER - 3); g.lineTo(x - 4, RULER - 7); g.closePath(); g.fill();
+  }
   for (const mk of P.markers) {
     const x = Math.round(X(mk.t)); if (x < -8 || x > TW + 8) continue;
     if (mk.beat) { g.fillStyle = '#4cc9f0'; g.fillRect(x, RULER - 8, 1, 7); g.fillRect(x - 1, RULER - 3, 3, 2); }
@@ -341,6 +346,7 @@ function snapTargets(exclude, withPlayhead = true) {
   const s = [0]; if (withPlayhead) s.push(UI.t);
   if (P.inPt != null) s.push(P.inPt); if (P.outPt != null) s.push(P.outPt);
   for (const m of P.markers) s.push(m.t);
+  if (P.reframe && UI.view === 'reframe') for (const k of P.reframe.keys) s.push(k.t);
   for (const c of P.clips) { if (exclude && exclude.has(c.id)) continue; s.push(c.start, cend(c)); }
   return s;
 }

@@ -109,6 +109,19 @@ Separating sound from video
   Right-click an audio or video clip → Normalise (or the Normalise button in the inspector) sets its
   volume so its loudest moment peaks at −1 dB.
 
+Vertical version of a landscape edit (reframe)
+  Click the 9:16 tab above the viewer (or Project → Open the 9:16 viewer). The viewer shows a vertical
+  window over your 16:9 timeline:
+  * Drag in the viewer to move the window, scroll to zoom (1× = the full height of the frame),
+    double-click to centre it. The inspector has the same as sliders, plus the shape (9:16, 4:5, 1:1).
+  * Keyframes: "Add key here" pins the framing at the playhead. Once there's a key, every drag or zoom
+    keys the playhead, and the window moves between keys. Per key, choose how it moves to the next:
+    Smooth, Linear, or Cut (holds, then jumps — for shot changes). "Key every cut" adds a Cut key at each
+    edit so you can frame each shot. Keys show as orange diamonds on the ruler and the playhead snaps to them.
+  * Export → Frame → "Reframe 9:16" renders the window at 1080×1920. Sources are decoded at the size the
+    deepest zoom needs, so zooming into 4K footage stays sharp.
+  * The 16:9 edit is untouched; switch back with the 9:16 tab.
+
 Sound editing
   Select an audio clip to edit its sound (the inspector has every control; right-click has the common ones):
   * Volume points: a selected audio clip shows a yellow volume line. Click it to add a point and drag it
