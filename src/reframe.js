@@ -75,6 +75,7 @@ function rfJump(dir) {
 function rfToggleView(on = UI.view !== 'reframe') {
   if (on && !rfPossible()) return toast('The project is already narrower than a vertical frame — reframing is for landscape projects', true);
   if (on && !P.reframe) P.reframe = rfDefault();
+  if (on) { UI.sel.clear(); UI.selXf = null; } // the inspector shows the reframe controls when nothing is selected
   UI.view = on ? 'reframe' : 'main';
   if (on && UI.mode !== 'timeline') setMode('timeline');
   $('#tabRF').classList.toggle('on', on); $('#viewer').classList.toggle('reframe', on);

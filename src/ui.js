@@ -237,6 +237,8 @@ function inspClip(c) {
     chips([['0.25s', false, () => edit(() => { c.fadeIn = c.fadeOut = Math.min(0.25, cdur(c) / 2); })], ['0.5s', false, () => edit(() => { c.fadeIn = c.fadeOut = Math.min(0.5, cdur(c) / 2); })], ['1s', false, () => edit(() => { c.fadeIn = c.fadeOut = Math.min(1, cdur(c) / 2); })], ['None', false, () => edit(() => { c.fadeIn = c.fadeOut = 0; })]])));
   if (c.kind === 'text') inspText(c, B);
   if (c.kind === 'color') B.append(sec('Matte', rowC('Colour', () => c.color, v => { c.color = v; })));
+  if ((c.kind === 'video' || c.kind === 'image') && rfPossible()) B.append(sec('Vertical version',
+    h('div', { class: 'btnrow' }, h('button', { class: 'primary', onclick: () => rfView() ? (UI.sel.clear(), renderInsp(), dirtyTL = true) : rfToggleView(true) }, rfView() ? 'Show the 9:16 reframe controls' : 'Open the 9:16 viewer'))));
   if (vis) {
     B.append(sec(['Transform', h('button', { onclick: () => edit(() => Object.assign(c, { x: 0, y: 0, scale: 1, rot: 0, opacity: 1 })) }, 'Reset')],
       rowR('Opacity', () => c.opacity ?? 1, v => { c.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: v => Math.round(v * 100) + '%', def: 1 }),

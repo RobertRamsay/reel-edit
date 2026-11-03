@@ -77,6 +77,9 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 /* viewer */
 #viewer{background:var(--bg0)}
 .vtabs button{padding:2px 9px;text-transform:none;letter-spacing:0;font-size:11px}
+.vtabs .rftab{margin-left:10px;padding:4px 12px;font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:6px;color:#ffb27a;border:1.5px solid var(--acc);background:rgba(255,138,61,.1)}
+.vtabs .rftab:hover{background:rgba(255,138,61,.22);color:#fff}
+.vtabs .rftab.on{background:var(--acc);color:#1a0d04;border-color:var(--acc)}
 #vInfo{color:var(--tx3);text-transform:none;letter-spacing:0;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 0;text-align:right}
 #stageWrap{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;min-height:0;padding:10px;position:relative}
 #stage{position:relative;background:#000;box-shadow:0 0 0 1px var(--line),0 10px 40px rgba(0,0,0,.5)}
@@ -220,7 +223,7 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
     </aside>
 
     <section id="viewer" class="panel">
-      <div class="phead vtabs"><button data-mode="timeline" class="on" id="tabTL">Timeline</button><button data-mode="source" id="tabSrc" disabled>Source</button><button id="tabRF" title="Vertical viewer: a 9:16 window over the landscape timeline — drag to position, scroll to zoom, keyframe it">9:16</button><div class="spacer"></div><span id="vInfo"></span></div>
+      <div class="phead vtabs"><button data-mode="timeline" class="on" id="tabTL">Timeline</button><button data-mode="source" id="tabSrc" disabled>Source</button><button id="tabRF" class="rftab" title="Vertical viewer: a 9:16 window over the landscape timeline — drag to position, scroll to zoom, keyframe it"><svg viewBox="0 0 24 24" width="12" height="12"><rect x="7" y="2" width="10" height="20" rx="2" fill="none" stroke="currentColor" stroke-width="2.4"/></svg>9:16 Vertical</button><div class="spacer"></div><span id="vInfo"></span></div>
       <div id="stageWrap"><div id="stage"><canvas id="pv"></canvas><div id="guides"></div><pre id="diag" hidden></pre><span id="qual" hidden></span><span id="pnote" hidden></span><span id="rfInfo" hidden></span></div><canvas id="meter" width="8" height="200"></canvas></div>
       <canvas id="srcBar"></canvas>
       <div id="transport">
@@ -292,7 +295,7 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 <input type="file" id="fileIn" multiple accept="video/*,audio/*,image/*,.mkv,.mov,.flac" hidden>
 <input type="file" id="projIn" accept=".json,application/json" hidden>
 <script>
-const APP_VER = {"version":"1.2.0","build":3,"date":"2026-11-03","feed":"https://gist.githubusercontent.com/RobertRamsay/7329b3fd3b6a84fc30fcbb1b39539410/raw/latest.json"};
+const APP_VER = {"version":"1.2.1","build":4,"date":"2026-11-03","feed":"https://gist.githubusercontent.com/RobertRamsay/7329b3fd3b6a84fc30fcbb1b39539410/raw/latest.json"};
 'use strict';
 /* ============================================================
    REEL EDIT — core: state, history, media, audio, playback, render
@@ -1399,6 +1402,7 @@ function rfJump(dir) {
 function rfToggleView(on = UI.view !== 'reframe') {
   if (on && !rfPossible()) return toast('The project is already narrower than a vertical frame — reframing is for landscape projects', true);
   if (on && !P.reframe) P.reframe = rfDefault();
+  if (on) { UI.sel.clear(); UI.selXf = null; } // the inspector shows the reframe controls when nothing is selected
   UI.view = on ? 'reframe' : 'main';
   if (on && UI.mode !== 'timeline') setMode('timeline');
   $('#tabRF').classList.toggle('on', on); $('#viewer').classList.toggle('reframe', on);
@@ -3242,6 +3246,8 @@ function inspClip(c) {
     chips([['0.25s', false, () => edit(() => { c.fadeIn = c.fadeOut = Math.min(0.25, cdur(c) / 2); })], ['0.5s', false, () => edit(() => { c.fadeIn = c.fadeOut = Math.min(0.5, cdur(c) / 2); })], ['1s', false, () => edit(() => { c.fadeIn = c.fadeOut = Math.min(1, cdur(c) / 2); })], ['None', false, () => edit(() => { c.fadeIn = c.fadeOut = 0; })]])));
   if (c.kind === 'text') inspText(c, B);
   if (c.kind === 'color') B.append(sec('Matte', rowC('Colour', () => c.color, v => { c.color = v; })));
+  if ((c.kind === 'video' || c.kind === 'image') && rfPossible()) B.append(sec('Vertical version',
+    h('div', { class: 'btnrow' }, h('button', { class: 'primary', onclick: () => rfView() ? (UI.sel.clear(), renderInsp(), dirtyTL = true) : rfToggleView(true) }, rfView() ? 'Show the 9:16 reframe controls' : 'Open the 9:16 viewer'))));
   if (vis) {
     B.append(sec(['Transform', h('button', { onclick: () => edit(() => Object.assign(c, { x: 0, y: 0, scale: 1, rot: 0, opacity: 1 })) }, 'Reset')],
       rowR('Opacity', () => c.opacity ?? 1, v => { c.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: v => Math.round(v * 100) + '%', def: 1 }),
