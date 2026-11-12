@@ -148,6 +148,11 @@ sealed class MainForm : Form
         cw.WebResourceRequested += ServeOpenedFile;
         cw.DownloadStarting += OnDownloadStarting;
         cw.WebMessageReceived += OnWebMessage;
+        cw.PermissionRequested += (_, e) =>
+        {   // the app's own page asks for the mic only when you press Record
+            if (e.PermissionKind == CoreWebView2PermissionKind.Microphone && e.Uri.StartsWith($"https://{Host}/", StringComparison.OrdinalIgnoreCase))
+                e.State = CoreWebView2PermissionState.Allow;
+        };
         cw.NewWindowRequested += (_, e) =>
         {
             e.Handled = true;

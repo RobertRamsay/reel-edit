@@ -99,6 +99,19 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 #viewer.source #srcBar{display:block}
 #viewer.reframe #stage{cursor:grab;box-shadow:0 0 0 2px var(--acc),0 10px 40px rgba(0,0,0,.5)}
 #viewer.reframe #stage:active{cursor:grabbing}
+/* recording */
+button.rec{color:#ff8b95;border-color:rgba(255,77,94,.55)}
+button.rec:hover{background:rgba(255,77,94,.16);color:#fff}
+button.rec.recon{background:var(--red);border-color:var(--red);color:#fff}
+#recHud{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:80;display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;background:rgba(20,10,12,.96);box-shadow:0 0 0 1.5px var(--red),0 10px 30px rgba(0,0,0,.6);font-weight:600}
+.recdot{width:11px;height:11px;border-radius:50%;background:var(--red);animation:recblink 1s steps(2) infinite}
+@keyframes recblink{50%{opacity:.25}}
+.rect{font-variant-numeric:tabular-nums;min-width:64px;color:#fff}
+.recmeter{width:120px;height:8px;border-radius:3px;background:#000;overflow:hidden}
+.reclv{display:block;height:100%;width:0;background:linear-gradient(90deg,#36946d,#cfae36 75%,#d94452)}
+.reclv.hot{box-shadow:0 0 6px #d94452}
+.aetake{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1.5px solid var(--red);background:#1b1012;flex-wrap:wrap}
+.aetake input[type=range]{width:140px}
 /* audio editor */
 #aed{position:fixed;inset:0;z-index:60;background:var(--bg0);display:flex;flex-direction:column}
 #aed .spacer{flex:1}
@@ -289,6 +302,7 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
         <button id="aXfade" title="Add a transition at the cut nearest the playhead (Ctrl+T)">+ Transition</button>
         <button id="aBeats" title="Detect the beat of the selected music clip and drop markers you can snap cuts to">♪ Beats</button>
         <button id="aMarker" title="Add marker at playhead (M) — works while playing, so you can tap along">◆ Marker</button>
+        <button id="bRec" class="rec" title="Record a voice-over (or beatbox, singing…) from the playhead while the edit plays — the take lands on a free audio track. Use headphones.">● Rec</button>
       </div>
       <span id="hint"></span>
       <div class="grp"><button id="zOut" title="Zoom out (−)">−</button><input id="zoom" type="range" min="0" max="1000" title="Zoom (Ctrl+wheel)"><button id="zIn" title="Zoom in (=)">+</button><button id="zFit" title="Zoom to fit (\)">Fit</button></div>

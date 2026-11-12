@@ -122,6 +122,24 @@ Vertical version of a landscape edit (reframe)
     deepest zoom needs, so zooming into 4K footage stays sharp.
   * The 16:9 edit is untouched; switch back with the 9:16 tab.
 
+Recording (voice-over, beatbox, singing along)
+  Use headphones, so the microphone only hears you.
+  * Timeline: put the playhead where you want to start and press ● Rec (timeline toolbar). The edit plays
+    and your mic records; Space stops (and keeps the take), Esc cancels. It also stops by itself at the
+    end of the edit. The take lands as "Voice N.wav" on the target audio track, or a free one.
+  * Audio editor: ● Record plays the file from the cursor (or the selection start) while you record. When
+    you stop, choose Mix in (at a level you set — an overdub), Replace (swap that part for the take),
+    Only save the take, or Discard. "Also keep the take in the bin" saves every take as its own file.
+    Then Save as copy / Export file… gives you the finished mix, e.g. music + beatbox for a client.
+  * Timing: the backing plays from the audio clock the mic is recorded on, and the speaker + mic delay
+    the system reports is removed, so takes land where you performed them. If yours still land a little
+    late or early, adjust Project → Recording → Sync offset.
+  * Project → Recording: choose the microphone, and "Hear yourself" to have your mic in the headphones.
+  * The microphone's own processing (echo cancelling, noise suppression, auto gain) is off, to keep
+    the sound natural and the transients sharp.
+  * Desktop app: Windows must allow microphone access for desktop apps (Settings → Privacy & security →
+    Microphone).
+
 Audio editor
   Double-click an audio file in the media bin (or right-click → Edit in audio editor; for a video,
   "Edit its sound…"; for a clip, "Edit audio…", which opens with that clip's part selected).

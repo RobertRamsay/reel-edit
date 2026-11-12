@@ -37,7 +37,8 @@ function aeBuildUI() {
       h('span', { id: 'aeBusy', class: 'aebusy', hidden: true }),
       b('Close', aeClose, 'Close the editor (Esc)')),
     h('div', { class: 'aebar' },
-      grp('Play', b('▶ Play', aePlayToggle, 'Play the selection, or from the cursor (Space)', 'primary'), h('button', { id: 'aeLoop', title: 'Loop the selection while playing', onclick: () => { AE.loop = !AE.loop; $('#aeLoop').classList.toggle('on', AE.loop); if (AE.play) { aeStop(); aePlay(); } } }, '⟲ Loop')),
+      grp('Play', b('▶ Play', aePlayToggle, 'Play the selection, or from the cursor (Space)', 'primary'),
+        h('button', { id: 'aeRec', class: 'rec', title: 'Record along: the file plays from the cursor while your mic records — then mix the take in. Use headphones.', onclick: () => aeRecord() }, '● Record'), h('button', { id: 'aeLoop', title: 'Loop the selection while playing', onclick: () => { AE.loop = !AE.loop; $('#aeLoop').classList.toggle('on', AE.loop); if (AE.play) { aeStop(); aePlay(); } } }, '⟲ Loop')),
       grp('View', b('−', () => aeZoom(2), 'Zoom out'), b('+', () => aeZoom(0.5), 'Zoom in (or scroll on the waveform)'), b('Fit', aeFit, 'Show the whole file'), b('Zoom to selection', aeZoomSel, 'Fill the view with the selection')),
       grp('Select', b('All', () => { AE.sel = [0, AE.n]; aeDraw(); }, 'Select everything (Ctrl+A)'), b('None', () => { AE.sel = null; aeDraw(); }, 'Clear the selection — effects then apply to the whole file')),
       grp('Edit', b('Undo', aeUndo, 'Ctrl+Z'), b('Redo', aeRedo, 'Ctrl+Y'), b('Cut', aeCut, 'Ctrl+X'), b('Copy', aeCopy, 'Ctrl+C'), b('Paste', aePaste, 'Ctrl+V — replaces the selection, or inserts at the cursor'),
@@ -193,7 +194,7 @@ function aeWire() {
 
 /* ---------- keys (captured while the editor is open, so timeline shortcuts don't fire) ---------- */
 function aeKey(e) {
-  if (!AE) return;
+  if (!AE || REC) return;
   const t = document.activeElement && document.activeElement.tagName;
   if (t === 'SELECT' || (t === 'INPUT' && document.activeElement.type !== 'checkbox')) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key, ctrl = e.ctrlKey || e.metaKey;

@@ -174,6 +174,19 @@ function inspProject() {
     rowC('Background', () => S.bg, v => { S.bg = v; })));
   if (rfPossible()) B.append(sec('Vertical version', h('div', { class: 'note' }, 'Make a 9:16 (or 4:5 / 1:1) version of this landscape edit: position and zoom a vertical window, with keyframes.'),
     h('div', { class: 'btnrow' }, h('button', { class: 'primary', onclick: () => rfToggleView(true) }, 'Open the 9:16 viewer'))));
+  const mic = h('select', {}, h('option', { value: '' }, 'Default microphone'));
+  if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) navigator.mediaDevices.enumerateDevices().then(ds => {
+    ds.filter(d => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default').forEach((d, i) => mic.append(h('option', { value: d.deviceId }, d.label || `Microphone ${i + 1} (allow access once to see names)`)));
+    mic.value = RPREF.dev; if (mic.value !== RPREF.dev) mic.value = '';
+  }).catch(() => { });
+  mic.onchange = () => { RPREF.dev = mic.value; saveRecPrefs(); };
+  const off = h('input', { type: 'range', min: -300, max: 300, step: 5, value: RPREF.offsetMs }), offv = h('span', { class: 'val' }, RPREF.offsetMs + ' ms');
+  off.oninput = () => { RPREF.offsetMs = +off.value; offv.textContent = off.value + ' ms'; saveRecPrefs(); };
+  B.append(sec('Recording',
+    h('div', { class: 'row' }, h('label', {}, 'Microphone'), mic, h('span')),
+    rowB('Hear yourself', () => RPREF.monitor, v => { RPREF.monitor = v; saveRecPrefs(); }, h('span', { class: 'note' }, 'mic in your headphones (adds a slight delay)')),
+    h('div', { class: 'row' }, h('label', { title: 'Speaker and mic delay is taken off automatically. If takes still land late, move this right; early, move it left.' }, 'Sync offset'), off, offv),
+    h('div', { class: 'note' }, '● Rec (timeline toolbar) records from the playhead while the edit plays; the audio editor has its own ● Record. Use headphones so the mic only hears you.')));
   B.append(sec('Defaults',
     rowS('Transition', () => S.xfType, v => { S.xfType = v; $('#xfType').value = v; }, Object.entries(XF)),
     rowN('Length', () => S.xfDur, v => { S.xfDur = v; $('#xfDur').value = v; }, { min: 0.04, max: 10, step: 0.05, suffix: 's' }),
@@ -780,6 +793,7 @@ $('#tgSnap').onclick = () => toggle('snap'); $('#tgX').onclick = () => toggle('a
 const xfSel = $('#xfType'); for (const [k, l] of Object.entries(XF)) xfSel.append(h('option', { value: k }, l));
 xfSel.onchange = () => { P.settings.xfType = xfSel.value; scheduleAutosave(); renderInsp(); xfSel.blur(); };
 $('#xfDur').onchange = e => { const v = parseFloat(e.target.value); if (v > 0) { P.settings.xfDur = clamp(v, 0.04, 10); scheduleAutosave(); } e.target.value = P.settings.xfDur; e.target.blur(); };
+$('#bRec').onclick = () => recTimeline();
 $('#aSplit').onclick = cmdSplit; $('#aXfade').onclick = cmdAddXfade; $('#aBeats').onclick = () => cmdBeats(); $('#aMarker').onclick = () => addMarker();
 $('#zIn').onclick = () => setZoom(UI.pps * 1.5); $('#zOut').onclick = () => setZoom(UI.pps / 1.5); $('#zFit').onclick = zoomFit;
 $('#zoom').oninput = e => setZoom(Math.pow(2, +e.target.value / 1000 * (Math.log2(2400) + 1) - 1));
