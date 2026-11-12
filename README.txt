@@ -122,6 +122,22 @@ Vertical version of a landscape edit (reframe)
     deepest zoom needs, so zooming into 4K footage stays sharp.
   * The 16:9 edit is untouched; switch back with the 9:16 tab.
 
+Audio editor
+  Double-click an audio file in the media bin (or right-click → Edit in audio editor; for a video,
+  "Edit its sound…"; for a clip, "Edit audio…", which opens with that clip's part selected).
+  It works on a copy of the sound — the original file is never changed.
+  * Click to place the cursor, drag to select, Shift+click to extend. Scroll to zoom (around the mouse),
+    Shift+scroll to move along; the strip at the bottom shows the whole file — click or drag it to jump.
+  * Space plays the selection (or from the cursor); Loop repeats the selection.
+  * Edit: Undo/Redo (Ctrl+Z / Ctrl+Y), Cut/Copy/Paste (Ctrl+X/C/V — paste replaces the selection or
+    inserts at the cursor), Delete, Trim to selection, Silence, Insert silence, Reverse.
+  * Effects apply to the selection, or to the whole file when nothing is selected: Normalise, ±dB gain,
+    fade in/out, EQ presets (Low cut, Voice, Warm, Bright, Music bed, Phone), compressor (Gentle, Voice,
+    Heavy), Echo, Slap, Room and Hall reverb, Speed (pitch changes with it), Noise reduction.
+  * Save as copy in project adds "<name> (edit).wav" to the bin. Tick "Use it in the timeline" to switch
+    the clips that used the original over to the edited copy. Export file… saves a WAV or M4A elsewhere.
+  * Esc closes; if you have unsaved edits it asks first.
+
 Sound editing
   Select an audio clip to edit its sound (the inspector has every control; right-click has the common ones):
   * Volume points: a selected audio clip shows a yellow volume line. Click it to add a point and drag it

@@ -154,27 +154,30 @@ function denoiseWork(L, R, beta, floor, prog) {
   return outR ? [outL, outR] : [outL];
 }
 const NR_LEVELS = { light: [1.5, 0.3], medium: [2.5, 0.15], strong: [4, 0.07] };
+// run denoiseWork in a worker on raw channels (they're transferred, so pass copies you can give away)
+function denoiseArrays(L, R, level, prog) {
+  const url = URL.createObjectURL(new Blob([`${denoiseWork}\nonmessage = e => { const o = denoiseWork(e.data.L, e.data.R, e.data.beta, e.data.floor, p => postMessage({ p })); postMessage({ out: o }, o.map(a => a.buffer)); };`], { type: 'text/javascript' }));
+  const w = new Worker(url), [beta, floor] = NR_LEVELS[level] || NR_LEVELS.medium;
+  return new Promise((res, rej) => {
+    w.onmessage = e => { if (e.data.out) res(e.data.out); else if (prog) prog(e.data.p); };
+    w.onerror = e => rej(new Error(e.message || 'worker failed'));
+    w.postMessage({ L, R, beta, floor }, [L.buffer].concat(R ? [R.buffer] : []));
+  }).finally(() => { w.terminate(); URL.revokeObjectURL(url); });
+}
 async function cleanAudio(m, level = 'medium') {
   if (m.offline) return null;
   const bar = h('i'), lab = h('div', { class: 'note' }, 'Reading the sound…');
   openModal(h('div', {}, h('h2', {}, 'Reducing noise · ' + m.name), h('div', { class: 'pbar' }, bar), lab));
-  const url = URL.createObjectURL(new Blob([`${denoiseWork}\nonmessage = e => { const o = denoiseWork(e.data.L, e.data.R, e.data.beta, e.data.floor, p => postMessage({ p })); postMessage({ out: o }, o.map(a => a.buffer)); };`], { type: 'text/javascript' }));
-  const w = new Worker(url);
   try {
     const buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(await (m.sndUrl ? (await fetch(m.sndUrl)).arrayBuffer() : m.file.arrayBuffer()));
     const L = new Float32Array(buf.getChannelData(0)), R = buf.numberOfChannels > 1 ? new Float32Array(buf.getChannelData(1)) : null;
-    const [beta, floor] = NR_LEVELS[level] || NR_LEVELS.medium;
     lab.textContent = 'Learning the background noise and cleaning…';
-    const out = await new Promise((res, rej) => {
-      w.onmessage = e => { if (e.data.out) res(e.data.out); else bar.style.width = (e.data.p * 100).toFixed(1) + '%'; };
-      w.onerror = e => rej(new Error(e.message || 'worker failed'));
-      w.postMessage({ L, R, beta, floor }, [L.buffer].concat(R ? [R.buffer] : []));
-    });
+    const out = await denoiseArrays(L, R, level, p => { bar.style.width = (p * 100).toFixed(1) + '%'; });
     const name = m.name.replace(/( \((audio|clean)\))*\.[^.]+$/, '') + ' (clean).wav';
     const [a] = await importFiles([new File([wavBlob(out, buf.sampleRate)], name, { type: 'audio/wav' })], { quiet: true });
     return a || null;
   } catch (e) { toast("Couldn't reduce noise: " + e.message, true); return null; }
-  finally { w.terminate(); URL.revokeObjectURL(url); $('#modal').hidden = true; }
+  finally { $('#modal').hidden = true; }
 }
 // clip: audio clips switch to the cleaned file; a video clip's sound goes to an audio track as the clean copy
 async function cmdDenoise(c, level) {

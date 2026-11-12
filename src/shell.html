@@ -99,6 +99,23 @@ svg.i{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stro
 #viewer.source #srcBar{display:block}
 #viewer.reframe #stage{cursor:grab;box-shadow:0 0 0 2px var(--acc),0 10px 40px rgba(0,0,0,.5)}
 #viewer.reframe #stage:active{cursor:grabbing}
+/* audio editor */
+#aed{position:fixed;inset:0;z-index:60;background:var(--bg0);display:flex;flex-direction:column}
+#aed .spacer{flex:1}
+.aehead{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--bg1)}
+.aetitle{display:flex;gap:10px;align-items:baseline;min-width:0}.aetitle b{color:var(--acc);font-size:13px;letter-spacing:.04em;text-transform:uppercase}
+#aeName{color:var(--tx);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aebusy{color:#ffb27a;font-weight:600}
+.aebar{display:flex;flex-wrap:wrap;gap:6px 14px;padding:7px 12px;border-bottom:1px solid var(--line);background:var(--bg1)}
+.aefxbar{background:var(--bg0)}
+.aegrp,.aefx{display:flex;gap:3px;align-items:center}
+.aelab{color:var(--tx3);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-right:4px}
+.aewave{flex:1;min-height:120px;position:relative}
+#aeCv{position:absolute;inset:0;width:100%;height:100%;cursor:text;touch-action:none}
+#aeOv{display:block;width:100%;height:46px;border-top:1px solid var(--line);cursor:pointer;flex:none}
+.aefoot{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--line);background:var(--bg1)}
+.aestat{color:var(--tx2);font-variant-numeric:tabular-nums;white-space:pre;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.aechk{display:flex;gap:5px;align-items:center;color:var(--tx2)}
 #rfInfo{position:absolute;left:6px;bottom:6px;font:700 10px/1 "Segoe UI",sans-serif;letter-spacing:.06em;padding:4px 7px;border-radius:4px;pointer-events:none;background:rgba(0,0,0,.6);color:#ffb27a;box-shadow:inset 0 0 0 1px rgba(255,138,61,.6)}
 #viewer.source #stage{box-shadow:0 0 0 2px var(--cy),0 10px 40px rgba(0,0,0,.5)}
 #transport{display:flex;align-items:center;gap:4px;padding:6px 10px;border-top:1px solid var(--line);background:var(--bg1);flex:none}

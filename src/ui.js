@@ -38,7 +38,7 @@ function renderBin() {
   for (const m of media.values()) {
     if (f && !m.name.toLowerCase().includes(f)) continue;
     const cv = h('canvas', { width: 160, height: 90 });
-    const card = h('div', { class: 'bcard' + (UI.binSel === m.id ? ' sel' : '') + (m.offline ? ' off' : ''), draggable: !m.offline, title: m.name + (m.offline ? '\nOFFLINE — click to relink' : '\nDouble-click: open in Source viewer · drag to timeline · E append') },
+    const card = h('div', { class: 'bcard' + (UI.binSel === m.id ? ' sel' : '') + (m.offline ? ' off' : ''), draggable: !m.offline, title: m.name + (m.offline ? '\nOFFLINE — click to relink' : (m.type === 'audio' ? '\nDouble-click: open in the audio editor · drag to timeline · E append' : '\nDouble-click: open in Source viewer · drag to timeline · E append')) },
       cv, h('div', { class: 'bmeta' }, h('span', { class: 'bt ' + m.type }), h('span', { class: 'bn' }, m.name), h('span', { class: 'bd' }, m.offline ? 'OFFLINE' : (m.picOnly ? '🔇 ' : '') + (isFinite(m.duration) ? fmtS(m.duration) : 'still'))));
     card.dataset.id = m.id; m._cv = cv; m._card = card;
     drawBinThumb(m);
@@ -48,7 +48,7 @@ function renderBin() {
       if (m.offline) { pendingRelink = m; $('#fileIn').click(); return; }
       UI.binSel = m.id; $$('.bcard').forEach(c => c.classList.toggle('sel', c.dataset.id === m.id));
     });
-    card.addEventListener('dblclick', () => openSource(m));
+    card.addEventListener('dblclick', () => m.type === 'audio' ? openAudioEditor(m) : openSource(m));
     card.addEventListener('dragstart', e => { UI.dragMedia = m; UI.binSel = m.id; e.dataTransfer.setData('text/plain', m.name); e.dataTransfer.effectAllowed = 'copy'; });
     card.addEventListener('dragend', () => { UI.dragMedia = null; UI.ghost = null; dirtyTL = true; });
     card.addEventListener('contextmenu', e => { e.preventDefault(); UI.binSel = m.id; binMenu(e.clientX, e.clientY, m); });
@@ -415,6 +415,7 @@ function clipMenu(x, y, c, t) {
     '-',
     c.kind === 'video' && m && m.hasAudio !== false ? { label: 'Detach audio', act: () => detachAudio(c) } : null,
     (c.kind === 'video' || c.kind === 'audio') && m && m.peaks ? { label: UI.sel.size > 1 ? 'Normalise selected (−1 dB peak)' : 'Normalise (−1 dB peak)', act: () => cmdNormalise(selClips()) } : null,
+    (c.kind === 'audio' || c.kind === 'video') && m && !m.offline && m.hasAudio !== false ? { label: 'Edit audio… (this clip’s part selected)', act: () => openAudioEditor(m, [c.in, c.out]) } : null,
     c.kind === 'audio' ? { label: 'Duck under other tracks (−12 dB)', act: () => cmdDuck(UI.sel.has(c.id) ? selClips() : [c]) } : null,
     c.kind === 'audio' && c.env ? { label: 'Clear volume points', act: () => edit(() => { c.env = null; }, 'Volume points cleared') } : null,
     (c.kind === 'video' || c.kind === 'audio') && m && !m.offline && m.hasAudio !== false ? { label: 'Reduce noise…', act: () => cmdDenoise(c, 'medium') } : null,
@@ -449,6 +450,7 @@ function trackMenu(x, y, tr) {
 }
 function binMenu(x, y, m) {
   showMenu(x, y, [{ head: m.name },
+    (m.type === 'audio' || (m.type === 'video' && m.hasAudio !== false)) ? { label: m.type === 'audio' ? 'Edit in audio editor…' : 'Edit its sound in the audio editor…', act: () => openAudioEditor(m), disabled: m.offline } : null,
     { label: 'Open in Source viewer', act: () => openSource(m), disabled: m.offline },
     { label: 'Append to timeline', key: 'E', act: () => placeMedia(m, 'append'), disabled: m.offline },
     { label: 'Insert at playhead', key: ',', act: () => placeMedia(m, 'insert'), disabled: m.offline },
