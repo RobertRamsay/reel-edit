@@ -326,7 +326,7 @@ button.rec.recon{background:var(--red);border-color:var(--red);color:#fff}
 <input type="file" id="fileIn" multiple accept="video/*,audio/*,image/*,.mkv,.mov,.flac" hidden>
 <input type="file" id="projIn" accept=".json,application/json" hidden>
 <script>
-const APP_VER = {"version":"1.4.0","build":7,"date":"2026-11-12","feed":"https://gist.githubusercontent.com/RobertRamsay/7329b3fd3b6a84fc30fcbb1b39539410/raw/latest.json"};
+const APP_VER = {"version":"1.4.1","build":8,"date":"2026-11-12","feed":"https://gist.githubusercontent.com/RobertRamsay/7329b3fd3b6a84fc30fcbb1b39539410/raw/latest.json"};
 'use strict';
 /* ============================================================
    REEL EDIT — core: state, history, media, audio, playback, render
@@ -2194,6 +2194,8 @@ function aeBuildUI() {
         h('button', { id: 'aeRec', class: 'rec', title: 'Record along: the file plays from the cursor while your mic records — then mix the take in. Use headphones.', onclick: () => aeRecord() }, '● Record'), h('button', { id: 'aeLoop', title: 'Loop the selection while playing', onclick: () => { AE.loop = !AE.loop; $('#aeLoop').classList.toggle('on', AE.loop); if (AE.play) { aeStop(); aePlay(); } } }, '⟲ Loop')),
       grp('View', b('−', () => aeZoom(2), 'Zoom out'), b('+', () => aeZoom(0.5), 'Zoom in (or scroll on the waveform)'), b('Fit', aeFit, 'Show the whole file'), b('Zoom to selection', aeZoomSel, 'Fill the view with the selection')),
       grp('Select', b('All', () => { AE.sel = [0, AE.n]; aeDraw(); }, 'Select everything (Ctrl+A)'), b('None', () => { AE.sel = null; aeDraw(); }, 'Clear the selection — effects then apply to the whole file')),
+      grp('Part', b('Save as new file', () => aeSavePart(), 'Save the selection — or, with nothing selected, what you last cut or copied — to the media bin as its own file'),
+        b('Export part…', () => aeSavePart(true), 'Save the selection (or what you last cut/copied) as a WAV or M4A, using the format by Export file…')),
       grp('Edit', b('Undo', aeUndo, 'Ctrl+Z'), b('Redo', aeRedo, 'Ctrl+Y'), b('Cut', aeCut, 'Ctrl+X'), b('Copy', aeCopy, 'Ctrl+C'), b('Paste', aePaste, 'Ctrl+V — replaces the selection, or inserts at the cursor'),
         b('Delete', aeDelete, 'Delete the selection (Del)'), b('Trim to selection', aeTrim, 'Keep only the selection'), b('Silence', aeSilence, 'Make the selection silent'), b('Insert silence…', aeInsertSilence, 'Add silence at the cursor'), b('Reverse', aeReverse, 'Play the selection (or everything) backwards'))),
     h('div', { class: 'aebar aefxbar' },
@@ -2316,7 +2318,10 @@ function aeWire() {
   const cv = $('#aeCv'), ov = $('#aeOv');
   const sAt = e => clamp(Math.round(AE.t0 + (e.clientX - cv.getBoundingClientRect().left) * AE.spp), 0, AE.n);
   let d = null;
+  let pan = null;
+  cv.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); }); // no browser autoscroll
   cv.addEventListener('pointerdown', e => {
+    if (e.button === 1) { e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch (_) { } pan = { x0: e.clientX, t0: AE.t0 }; cv.style.cursor = 'grabbing'; return; }
     if (e.button !== 0 || AE.busy) return;
     cv.setPointerCapture(e.pointerId);
     const s = sAt(e);
@@ -2325,13 +2330,14 @@ function aeWire() {
     aeDraw();
   });
   cv.addEventListener('pointermove', e => {
+    if (pan) { AE.t0 = pan.t0 - (e.clientX - pan.x0) * AE.spp; aeClampView(); aeDraw(); return; }
     if (!d) return;
     if (Math.abs(e.clientX - d.x0) < 3) return;
     const s = sAt(e); AE.sel = s === d.anchor ? null : [Math.min(d.anchor, s), Math.max(d.anchor, s)];
     const x = e.clientX - cv.getBoundingClientRect().left; if (x > aeW() - 10) { AE.t0 += AE.spp * 12; aeClampView(); } else if (x < 10) { AE.t0 -= AE.spp * 12; aeClampView(); }
     aeDraw();
   });
-  const up = e => { if (!d) return; if (Math.abs(e.clientX - d.x0) < 3) { AE.cur = d.anchor; AE.sel = null; if (AE.play) { aeStop(); aePlay(); } } else if (AE.sel) AE.cur = AE.sel[0]; d = null; aeDraw(); };
+  const up = e => { if (pan) { pan = null; cv.style.cursor = ''; return; } if (!d) return; if (Math.abs(e.clientX - d.x0) < 3) { AE.cur = d.anchor; AE.sel = null; if (AE.play) { aeStop(); aePlay(); } } else if (AE.sel) AE.cur = AE.sel[0]; d = null; aeDraw(); };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   cv.addEventListener('wheel', e => {
     e.preventDefault();
@@ -2466,10 +2472,22 @@ const aeDenoise = level => aeBusy('Noise reduction', async () => {
 });
 
 /* ---------- save / export / close ---------- */
-function aeCopyName() {
-  const base = AE.m.name.replace(/\.[^.]+$/, '').replace(/ \((edit|clean|audio)( \d+)?\)$/, '');
+function aeCopyName(kind = 'edit') {
+  const base = AE.m.name.replace(/\.[^.]+$/, '').replace(/ \((edit|clean|audio|part)( \d+)?\)$/, '');
   const names = new Set([...media.values()].map(x => x.name));
-  for (let i = 1; ; i++) { const nm = `${base} (edit${i > 1 ? ' ' + i : ''}).wav`; if (!names.has(nm)) return nm; }
+  for (let i = 1; ; i++) { const nm = `${base} (${kind}${i > 1 || kind === 'part' ? ' ' + i : ''}).wav`; if (!names.has(nm)) return nm; }
+}
+// the selection, or (nothing selected) what was last cut or copied, as its own file in the bin or exported
+async function aeSavePart(exportIt) {
+  const ch = AE.sel && AE.sel[1] > AE.sel[0] ? AE.ch.map(x => x.slice(AE.sel[0], AE.sel[1])) : AE.clip;
+  if (!ch || !ch[0].length) return toast('Select a part of the waveform first (or cut / copy one)', true);
+  const name = aeCopyName('part'), what = AE.sel ? 'selection' : 'what you cut/copied';
+  if (exportIt) return aeBusy('Exporting', () => aeWrite(ch, name.replace(/\.wav$/, '')));
+  await aeBusy('Saving', async () => {
+    const [a] = await importFiles([new File([wavBlob(ch, AE.sr)], name, { type: 'audio/wav' })], { quiet: true });
+    if (!a) throw new Error('could not add the file');
+    renderBin(); toast(`Saved the ${what} (${aeTime(ch[0].length / AE.sr)}) to the media bin as “${a.name}”`);
+  });
 }
 async function aeSave(replace) {
   await aeBusy('Saving', async () => {
@@ -2483,16 +2501,14 @@ async function aeSave(replace) {
     toast(`Saved “${a.name}” to the media bin` + (n ? ` — ${n} timeline clip${n > 1 ? 's' : ''} now use it` : ''));
   });
 }
-async function aeExport() {
-  const fmt = $('#aeFmt').value, base = aeCopyName().replace(/\.wav$/, '');
-  await aeBusy('Exporting', async () => {
-    if (fmt === 'wav') return download(wavBlob(AE.ch, AE.sr), base + '.wav');
-    const b = new AudioBuffer({ length: AE.n, numberOfChannels: 2, sampleRate: AE.sr });
-    b.copyToChannel(AE.ch[0], 0); b.copyToChannel(AE.ch[1] || AE.ch[0], 1);
-    const cfg = await pickAudio(AE.sr); if (!cfg) throw new Error('no AAC encoder — export WAV instead');
-    download(muxMP4(null, await encodeMix(b, cfg, () => { })), base + '.m4a');
-  });
+async function aeWrite(ch, base) {
+  if ($('#aeFmt').value === 'wav') return download(wavBlob(ch, AE.sr), base + '.wav');
+  const b = new AudioBuffer({ length: ch[0].length, numberOfChannels: 2, sampleRate: AE.sr });
+  b.copyToChannel(ch[0], 0); b.copyToChannel(ch[1] || ch[0], 1);
+  const cfg = await pickAudio(AE.sr); if (!cfg) throw new Error('no AAC encoder — export WAV instead');
+  download(muxMP4(null, await encodeMix(b, cfg, () => { })), base + '.m4a');
 }
+const aeExport = () => aeBusy('Exporting', () => aeWrite(AE.ch, aeCopyName().replace(/\.wav$/, '')));
 function aeClose() {
   if (!AE || AE.busy && AE.dirty) return;
   if (AE.dirty && !confirm('Close the audio editor and lose your edits? (Save as copy keeps them.)')) return;

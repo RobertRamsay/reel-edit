@@ -145,13 +145,16 @@ Audio editor
   "Edit its sound…"; for a clip, "Edit audio…", which opens with that clip's part selected).
   It works on a copy of the sound — the original file is never changed.
   * Click to place the cursor, drag to select, Shift+click to extend. Scroll to zoom (around the mouse),
-    Shift+scroll to move along; the strip at the bottom shows the whole file — click or drag it to jump.
+    Shift+scroll or drag with the middle mouse button to move along; the strip at the bottom shows the
+    whole file — click or drag it to jump.
   * Space plays the selection (or from the cursor); Loop repeats the selection.
   * Edit: Undo/Redo (Ctrl+Z / Ctrl+Y), Cut/Copy/Paste (Ctrl+X/C/V — paste replaces the selection or
     inserts at the cursor), Delete, Trim to selection, Silence, Insert silence, Reverse.
   * Effects apply to the selection, or to the whole file when nothing is selected: Normalise, ±dB gain,
     fade in/out, EQ presets (Low cut, Voice, Warm, Bright, Music bed, Phone), compressor (Gentle, Voice,
     Heavy), Echo, Slap, Room and Hall reverb, Speed (pitch changes with it), Noise reduction.
+  * Part → Save as new file puts just the selection (or, with nothing selected, what you last cut or
+    copied) in the bin as "<name> (part N).wav"; Export part… saves it as a WAV or M4A instead.
   * Save as copy in project adds "<name> (edit).wav" to the bin. Tick "Use it in the timeline" to switch
     the clips that used the original over to the edited copy. Export file… saves a WAV or M4A elsewhere.
   * Esc closes; if you have unsaved edits it asks first.
