@@ -191,6 +191,9 @@ function drawClipTL(g, c, lay) {
         while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (T[mid].t <= st) lo = mid; else hi = mid - 1; }
         if (lo < T.length - 1 && Math.abs(T[lo + 1].t - st) < Math.abs(T[lo].t - st)) lo++;
         th = T[lo];
+        // thumbs still being built only cover the start of the file: leave the rest blank rather than repeat the last one
+        const gap = T.length > 1 ? Math.max(0.5, (T[T.length - 1].t - T[0].t) / (T.length - 1)) : m.duration;
+        if (Math.abs(th.t - st) > gap * 1.5 + 0.5) { g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(tx, cy, tw - 1, ch); continue; }
       }
       g.globalAlpha = 0.85; g.drawImage(th.c, tx, cy, tw, ch); g.globalAlpha = 1;
       g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(tx + tw - 1, cy, 1, ch);
