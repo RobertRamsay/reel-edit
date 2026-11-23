@@ -326,7 +326,7 @@ button.rec.recon{background:var(--red);border-color:var(--red);color:#fff}
 <input type="file" id="fileIn" multiple accept="video/*,audio/*,image/*,.mkv,.mov,.flac" hidden>
 <input type="file" id="projIn" accept=".json,application/json" hidden>
 <script>
-const APP_VER = {"version":"1.4.1","build":8,"date":"2026-11-12","feed":"https://gist.githubusercontent.com/RobertRamsay/7329b3fd3b6a84fc30fcbb1b39539410/raw/latest.json"};
+const APP_VER = {"version":"1.4.2","build":9,"date":"2026-11-23","feed":"https://gist.githubusercontent.com/RobertRamsay/7329b3fd3b6a84fc30fcbb1b39539410/raw/latest.json"};
 'use strict';
 /* ============================================================
    REEL EDIT — core: state, history, media, audio, playback, render
@@ -2901,7 +2901,11 @@ function drawClipTL(g, c, lay) {
       let th = m.thumbs[0];
       if (c.kind === 'video' && m.thumbs.length > 1) {
         const st = c.in + ((tx - x0 + tw / 2) / UI.pps) * c.speed;
-        th = m.thumbs[clamp(Math.round(st / m.duration * m.thumbs.length - 0.5), 0, m.thumbs.length - 1)];
+        // thumbs carry their source time (and may be only partly built), so pick the nearest by t
+        const T = m.thumbs; let lo = 0, hi = T.length - 1;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (T[mid].t <= st) lo = mid; else hi = mid - 1; }
+        if (lo < T.length - 1 && Math.abs(T[lo + 1].t - st) < Math.abs(T[lo].t - st)) lo++;
+        th = T[lo];
       }
       g.globalAlpha = 0.85; g.drawImage(th.c, tx, cy, tw, ch); g.globalAlpha = 1;
       g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(tx + tw - 1, cy, 1, ch);
