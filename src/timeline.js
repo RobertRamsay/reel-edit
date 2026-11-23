@@ -186,7 +186,11 @@ function drawClipTL(g, c, lay) {
       let th = m.thumbs[0];
       if (c.kind === 'video' && m.thumbs.length > 1) {
         const st = c.in + ((tx - x0 + tw / 2) / UI.pps) * c.speed;
-        th = m.thumbs[clamp(Math.round(st / m.duration * m.thumbs.length - 0.5), 0, m.thumbs.length - 1)];
+        // thumbs carry their source time (and may be only partly built), so pick the nearest by t
+        const T = m.thumbs; let lo = 0, hi = T.length - 1;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (T[mid].t <= st) lo = mid; else hi = mid - 1; }
+        if (lo < T.length - 1 && Math.abs(T[lo + 1].t - st) < Math.abs(T[lo].t - st)) lo++;
+        th = T[lo];
       }
       g.globalAlpha = 0.85; g.drawImage(th.c, tx, cy, tw, ch); g.globalAlpha = 1;
       g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(tx + tw - 1, cy, 1, ch);
